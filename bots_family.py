@@ -22,6 +22,7 @@ import string
 import requests
 import base64
 from dateutil.relativedelta import relativedelta
+from DrissionPage import ChromiumPage, ChromiumOptions
 
 # =========================================================================
 # KHU VỰC 0: CẤU HÌNH HỆ THỐNG & KẾT NỐI CHUNG
@@ -822,7 +823,8 @@ def handle_docs_photo(message):
 
 
 # =========================================================================
-# KHU VỰC 2: BOT CÀO GIÁ PC
+# =========================================================================
+# KHU VỰC 2: BOT CÀO GIÁ PC (NÂNG CẤP AUTO & SMART RETRY)
 # =========================================================================
 TOKEN_CAOGIA = os.getenv("TOKEN_CAOGIA")
 bot_caogia = telebot.TeleBot(TOKEN_CAOGIA)
@@ -836,6 +838,7 @@ spreadsheet_caogia = client_caogia.open_by_url(SHEET_URL_CAOGIA)
 
 is_scraping = False
 cancel_scraping = False
+auto_config = {"interval_days": 0, "chat_id": None} # Biến lưu trạng thái hẹn giờ
 
 SHEET_CONFIG = {
     "PC_components": {"start_row_index": 0, "block_size": 13, "date_cell": "B1"},
@@ -843,8 +846,12 @@ SHEET_CONFIG = {
 }
 
 def clean_price(price_text):
-    num_str = re.sub(r'[^\d]', '', price_text)
-    return int(num_str) if num_str else 0
+    # Dùng Regex thông minh: Lọc lấy cụm số tiền đầu tiên (bỏ qua giá cũ gạch ngang)
+    match = re.search(r'\d+(?:[.,]\d+)*', price_text)
+    if match:
+        num_str = re.sub(r'[^\d]', '', match.group(0))
+        return int(num_str) if num_str else 0
+    return 0
 
 def duplicate_and_push_down(sheet_name):
     if sheet_name not in SHEET_CONFIG: return
@@ -855,7 +862,6 @@ def duplicate_and_push_down(sheet_name):
     today_format_2 = datetime.now().strftime("%d/%m/%Y") 
     current_date_val = str(target_sheet.acell(date_cell).value).strip()
     if current_date_val in [today_format_1, today_format_2]:
-        print(f"[{sheet_name}] Form ngày {current_date_val} đã tồn tại, bỏ qua tạo bảng mới.")
         return 
     start_idx = SHEET_CONFIG[sheet_name]["start_row_index"]
     block_size = SHEET_CONFIG[sheet_name]["block_size"]
@@ -866,17 +872,21 @@ def duplicate_and_push_down(sheet_name):
     spreadsheet_caogia.batch_update({'requests': requests_batch})
     target_sheet.update_acell(date_cell, today_format_1)
 
-def run_scraper_process(chat_id, scan_type="all"):
+def run_scraper_process(chat_id, scan_type="all", is_auto=False):
     global is_scraping, cancel_scraping
     if is_scraping:
-        bot_caogia.send_message(chat_id, "⚠️ Đang có một tiến trình cào giá khác chạy rồi sếp! Đợi xíu hoặc ấn Hủy đi nhé.")
+        if not is_auto: bot_caogia.send_message(chat_id, "⚠️ Đang có một tiến trình cào giá khác chạy rồi sếp!")
         return
     is_scraping = True
     cancel_scraping = False
     campaign_name = "CẤU HÌNH PC" if scan_type == "pc" else ("LAPTOP GAMING" if scan_type == "laptop" else "TẤT CẢ TÀI NGUYÊN")
+    
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("🛑 Hủy Cào Giá", callback_data="cancel_scrape"))
-    progress_msg = bot_caogia.send_message(chat_id, f"🚀 Bắt đầu khởi động chiến dịch cào giá: **{campaign_name}**...", reply_markup=markup, parse_mode="Markdown")
+    
+    prefix = "🤖 [AUTO TỰ ĐỘNG] " if is_auto else "🚀 "
+    progress_msg = bot_caogia.send_message(chat_id, f"{prefix}Bắt đầu chiến dịch: **{campaign_name}**...", reply_markup=markup, parse_mode="Markdown")
+    
     try:
         link_sheet = spreadsheet_caogia.worksheet("Data_Links")
         tasks = link_sheet.get_all_records()
@@ -887,73 +897,98 @@ def run_scraper_process(chat_id, scan_type="all"):
             if scan_type == "pc" and target != "PC_components": continue
             if scan_type == "laptop" and target != "Laptop_Gaming": continue
             valid_tasks.append(t)
-        total_tasks = len(valid_tasks)
-        if total_tasks == 0:
-            bot_caogia.edit_message_text(f"❌ Không tìm thấy link nào phù hợp cho mục {campaign_name}!", chat_id, progress_msg.message_id)
+            
+        if len(valid_tasks) == 0:
+            bot_caogia.edit_message_text(f"❌ Không tìm thấy link nào phù hợp!", chat_id, progress_msg.message_id)
             is_scraping = False; return
+            
         unique_sheets = set(str(t.get('Target_Sheet')).strip() for t in valid_tasks)
         for s_name in unique_sheets: duplicate_and_push_down(s_name)
-        API_KEY = os.getenv("SCRAPER_API_KEY_CAOGIA")
-        report_lines = []
-        for i, task in enumerate(valid_tasks, start=1):
-            if cancel_scraping:
-                bot_caogia.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text="🛑 SẾP ĐÃ HỦY TIẾN TRÌNH CÀO GIÁ GIỮA CHỪNG!")
-                break 
-            target_sheet_name = str(task.get('Target_Sheet')).strip()
-            cell = str(task.get('Cell')).strip()
-            url = str(task.get('URL')).strip()
-            css = str(task.get('CSS_Selector')).strip()
-            item_name = str(task.get('Ten_Linh_Kien', 'Sản phẩm')).strip()
-            if not item_name: item_name = "Sản phẩm"
-            shop_name = url.split("/")[2] if "//" in url else url[:20]
-            target_sheet = spreadsheet_caogia.worksheet(target_sheet_name)
-            status_icon, result_text = "⏳", "Đang xử lý..."
-            try:
-                payload = {'api_key': API_KEY, 'url': url}
-                response = requests.get('https://api.scraperapi.com/', params=payload, timeout=30)
-                if response.status_code == 200:
-                    soup = BeautifulSoup(response.text, "html.parser")
-                    price_element = soup.select_one(css)
+        
+        # Khởi tạo DrissionPage tối ưu siêu tốc (tắt hình ảnh, tắt thông báo)
+        co = ChromiumOptions().headless()
+        co.set_argument('--mute-audio')
+        co.set_pref('profile.default_content_setting_values.images', 2)
+        co.set_pref('profile.default_content_setting_values.notifications', 2)
+        page = ChromiumPage(co)
+        
+        tasks_to_run = valid_tasks.copy()
+        max_retries = 3      # Số vòng quét tối đa (Cào 1 lần + Vét lỗi 2 lần)
+        current_round = 1
+        
+        while tasks_to_run and current_round <= max_retries and not cancel_scraping:
+            failed_tasks = []
+            if current_round > 1:
+                bot_caogia.send_message(chat_id, f"♻️ **VÒNG {current_round} (VÉT LỖI):** Quét lại {len(tasks_to_run)} shop gặp sự cố...", parse_mode="Markdown")
+                
+            report_lines = []
+            for i, task in enumerate(tasks_to_run, start=1):
+                if cancel_scraping: break
+                
+                target_sheet_name = str(task.get('Target_Sheet')).strip()
+                cell = str(task.get('Cell')).strip()
+                url = str(task.get('URL')).strip()
+                css = str(task.get('CSS_Selector')).strip()
+                item_name = str(task.get('Ten_Linh_Kien', 'Sản phẩm')).strip()
+                shop_name = url.split("/")[2] if "//" in url else url[:20]
+                target_sheet = spreadsheet_caogia.worksheet(target_sheet_name)
+                
+                status_icon, result_text = "⏳", "Đang xử lý..."
+                is_success = False
+                
+                try:
+                    page.get(url, timeout=15)
+                    price_element = page.ele(f'css:{css}', timeout=10) # Chống nhầm class của DrissionPage
+                    
                     if price_element:
-                        price = clean_price(price_element.get_text(strip=True))
+                        price = clean_price(price_element.text)
                         he_so = task.get('He_So', 1) 
-                        if str(he_so).strip() == "": he_so = 1
-                        else:
-                            try: he_so = int(he_so)
-                            except: he_so = 1
+                        try: he_so = int(he_so) if str(he_so).strip() != "" else 1
+                        except: he_so = 1
                         price = price * he_so 
+                        
                         val = "LIÊN HỆ" if price == 0 else price
                         target_sheet.update_acell(cell, val)
-                        status_icon = "✅"
-                        price_str = f"{val:,}".replace(",", ".") + " đ" if isinstance(val, int) else val
-                        result_text = f"Xong ({price_str})"
+                        status_icon, result_text = "✅", f"Xong ({f'{val:,}'.replace(',', '.')} đ)" if isinstance(val, int) else "Xong (LIÊN HỆ)"
+                        is_success = True
                     else:
                         target_sheet.update_acell(cell, "LỖI CSS")
                         status_icon, result_text = "❌", "Lỗi CSS"
-                else:
+                except Exception as e:
                     target_sheet.update_acell(cell, "LỖI MẠNG")
-                    status_icon, result_text = "⚠️", f"Lỗi API ({response.status_code})"
-            except Exception as e:
-                target_sheet.update_acell(cell, "LỖI MẠNG")
-                status_icon, result_text = "⚠️", "Lỗi Kết Nối"
-            percent = int((i / total_tasks) * 100)
-            filled = int((percent / 100) * 15)
-            bar = "█" * filled + "░" * (15 - filled)
-            report_lines.append(f"{status_icon} [{item_name}] {shop_name}: {result_text}")
-            recent_reports = "\n".join(report_lines[-5:])
-            status_text = f"🔄 TIẾN TRÌNH: {percent}% [{i}/{total_tasks}]\n[{bar}]\n\nTrạng thái gần nhất:\n{recent_reports}"
-            try: bot_caogia.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text=status_text, reply_markup=markup)
-            except: pass
+                    status_icon, result_text = "⚠️", "Lỗi Kết Nối"
+                
+                # Nếu cào thất bại, ném link đó vào danh sách để vòng sau cào lại
+                if not is_success:
+                    failed_tasks.append(task)
+                    
+                report_lines.append(f"{status_icon} [{item_name}] {shop_name}: {result_text}")
+                recent_reports = "\n".join(report_lines[-5:])
+                status_text = f"🔄 TIẾN TRÌNH VÒNG {current_round}: [{i}/{len(tasks_to_run)}]\n\nTrạng thái gần nhất:\n{recent_reports}"
+                try: bot_caogia.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text=status_text, reply_markup=markup)
+                except: pass
+                
+            if failed_tasks and not cancel_scraping:
+                current_round += 1
+                tasks_to_run = failed_tasks
+                if current_round <= max_retries:
+                    time.sleep(15) # Mạng lắc thì cho máy chủ nghỉ thở 15 giây trước khi vét vòng tiếp theo
+            else:
+                break
+                
         if not cancel_scraping:
-            final_text = f"✅ BÁO CÁO SẾP: Đã quét xong {total_tasks} link của {campaign_name}!\n\nBảng giá mới nhất đã được đẩy lên Google Sheets."
-            try: bot_caogia.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text=final_text)
-            except: bot_caogia.send_message(chat_id, final_text)
+            final_text = f"✅ **BÁO CÁO SẾP:** Đã chốt xong {campaign_name}!\n\nSố vòng quét đã chạy: {min(current_round, max_retries)}\nSố lượng shop bị xịt hoàn toàn: {len(failed_tasks)}\nBảng giá đã được cập nhật thành công!"
+            try: bot_caogia.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text=final_text, parse_mode="Markdown")
+            except: bot_caogia.send_message(chat_id, final_text, parse_mode="Markdown")
     except Exception as e:
          error_detail = traceback.format_exc()
-         bot_caogia.send_message(chat_id, f"❌ Sếp ơi code gãy rồi! Chi tiết lỗi từ máy chủ đây:\n\n```python\n{error_detail[-3500:]}\n```", parse_mode="Markdown")
+         bot_caogia.send_message(chat_id, f"❌ Sếp ơi code gãy rồi! Chi tiết:\n\n```python\n{error_detail[-3500:]}\n```", parse_mode="Markdown")
     finally:
         is_scraping = False
+        try: page.quit() # Đóng trình duyệt để xoá rác RAM
+        except: pass
 
+# --- (ĐOẠN CODE VẼ BIỂU ĐỒ GIỮ NGUYÊN) ---
 def generate_and_send_chart(chat_id, item_name):
     bot_caogia.send_message(chat_id, f"⏳ Đang lục lọi lịch sử và vẽ biểu đồ cho: [{item_name}]...")
     try:
@@ -1023,15 +1058,15 @@ def generate_and_send_chart(chat_id, item_name):
 def send_menu_caogia(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add(types.KeyboardButton("🚀 Quét Giá Thị Trường"), types.KeyboardButton("📈 Xem Biểu Đồ Biến Động"))
-    markup.add(types.KeyboardButton("📊 Mở File Báo Cáo"))
+    markup.add(types.KeyboardButton("⏰ Setup Auto Quét"), types.KeyboardButton("📊 Mở File Báo Cáo"))
     bot_caogia.send_message(message.chat.id, "🤖 Trạm vũ trụ công nghệ đã sẵn sàng. Chọn lệnh dưới menu:", reply_markup=markup)
 
-@bot_caogia.message_handler(func=lambda message: message.text in ["🚀 Quét Giá Thị Trường", "📊 Mở File Báo Cáo", "📈 Xem Biểu Đồ Biến Động"])
+@bot_caogia.message_handler(func=lambda message: message.text in ["🚀 Quét Giá Thị Trường", "📊 Mở File Báo Cáo", "📈 Xem Biểu Đồ Biến Động", "⏰ Setup Auto Quét"])
 def handle_menu_click_caogia(message):
     text = message.text
     if text == "🚀 Quét Giá Thị Trường":
         markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(types.InlineKeyboardButton("🖥️ Chỉ quét cấu hình PC", callback_data="scan_pc"), types.InlineKeyboardButton("💻 Chỉ quét Laptop Gaming", callback_data="scan_laptop"), types.InlineKeyboardButton("🌍 Quét TẤT CẢ (Tốn Token)", callback_data="scan_all"))
+        markup.add(types.InlineKeyboardButton("🖥️ Chỉ quét cấu hình PC", callback_data="scan_pc"), types.InlineKeyboardButton("💻 Chỉ quét Laptop Gaming", callback_data="scan_laptop"), types.InlineKeyboardButton("🌍 Quét TẤT CẢ TÀI NGUYÊN", callback_data="scan_all"))
         bot_caogia.send_message(message.chat.id, "Sếp muốn lệnh cho bot đi cào ở mặt trận nào?", reply_markup=markup)
     elif text == "📊 Mở File Báo Cáo":
         bot_caogia.send_message(message.chat.id, f"Link Sheet của sếp đây: {SHEET_URL_CAOGIA}")
@@ -1045,6 +1080,23 @@ def handle_menu_click_caogia(message):
         markup = types.InlineKeyboardMarkup(row_width=1)
         for item in unique_items: markup.add(types.InlineKeyboardButton(f"📉 {item}", callback_data=f"chart_{item}"))
         bot_caogia.send_message(message.chat.id, "Sếp muốn vẽ biểu đồ cho linh kiện nào?", reply_markup=markup)
+    elif text == "⏰ Setup Auto Quét":
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(types.InlineKeyboardButton("🔄 Quét mỗi 3 ngày", callback_data="auto_3"),
+                   types.InlineKeyboardButton("🔄 Quét mỗi 5 ngày", callback_data="auto_5"),
+                   types.InlineKeyboardButton("❌ Tắt Auto", callback_data="auto_0"))
+        bot_caogia.send_message(message.chat.id, "Sếp muốn cài đặt lịch cào giá tự động thế nào?", reply_markup=markup)
+
+@bot_caogia.callback_query_handler(func=lambda call: call.data.startswith('auto_'))
+def callback_auto_config(call):
+    days = int(call.data.split('_')[1])
+    auto_config["interval_days"] = days
+    auto_config["chat_id"] = call.message.chat.id # Lưu lại ID của sếp để bot biết gửi tin nhắn cho ai
+    if days == 0:
+        msg = "❌ Đã tắt chế độ cào giá tự động!"
+    else:
+        msg = f"✅ Đã bật chế độ tự động quét mỗi **{days} ngày**!\n*(Bot sẽ kiểm tra ngày quét gần nhất trong Google Sheets để kích hoạt, chống quên lịch kể cả khi khởi động lại server)*"
+    bot_caogia.edit_message_text(msg, call.message.chat.id, call.message.message_id, parse_mode="Markdown")
 
 @bot_caogia.callback_query_handler(func=lambda call: call.data.startswith('chart_'))
 def callback_chart_query(call):
@@ -1057,13 +1109,36 @@ def callback_chart_query(call):
 def callback_scan_query(call):
     scan_type = call.data.replace('scan_', '')
     bot_caogia.delete_message(call.message.chat.id, call.message.message_id) 
-    run_scraper_process(call.message.chat.id, scan_type)
+    # Bỏ bot_caogia chạy trên một luồng riêng để tránh bị khóa giao diện Telegram
+    threading.Thread(target=run_scraper_process, args=(call.message.chat.id, scan_type)).start()
 
 @bot_caogia.callback_query_handler(func=lambda call: call.data == 'cancel_scrape')
 def callback_cancel_scrape(call):
     global cancel_scraping
     cancel_scraping = True
     bot_caogia.answer_callback_query(call.id, "Đang gửi lệnh phanh gấp, đợi chút nhé sếp...")
+
+# --- LUỒNG CHẠY NGẦM KIỂM TRA LỊCH HẸN GIỜ ---
+def auto_scan_worker():
+    while True:
+        if auto_config["interval_days"] > 0 and auto_config["chat_id"]:
+            try:
+                # Đọc ngày check gần nhất trực tiếp từ Google Sheets (Ô B1)
+                date_val = spreadsheet_caogia.worksheet("Laptop_Gaming").acell('B1').value
+                if date_val:
+                    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+                        try:
+                            last_date = datetime.strptime(date_val, fmt)
+                            delta = (datetime.now() - last_date).days
+                            # Nếu số ngày trôi qua >= số ngày sếp cài đặt -> Tiến hành cào
+                            if delta >= auto_config["interval_days"]:
+                                bot_caogia.send_message(auto_config["chat_id"], f"⏰ **ĐẾN HẸN LẠI LÊN!**\nĐã qua {delta} ngày kể từ lần quét cuối. Hệ thống Auto-pilot kích hoạt...", parse_mode="Markdown")
+                                run_scraper_process(auto_config["chat_id"], scan_type="all", is_auto=True)
+                            break # Thoát vòng lặp format ngày
+                        except: pass
+            except Exception as e:
+                print(f"Lỗi khi check lịch Auto: {e}")
+        time.sleep(3600) # Kiểm tra 1 tiếng 1 lần
 
 
 # =========================================================================
@@ -2006,6 +2081,9 @@ def run_bot_johnny():
 if __name__ == "__main__":
     # Bật Web Server (Giữ cho Render không tắt app)
     threading.Thread(target=run_server, daemon=True).start()
+    
+    # --- THÊM DÒNG NÀY ĐỂ BẬT TÍNH NĂNG AUTO CANH GIỜ ---
+    threading.Thread(target=auto_scan_worker, daemon=True).start()
     
     # Bật các Bot chạy song song trên các luồng ngầm (Daemon Threads)
     threading.Thread(target=run_bot_congtac, daemon=True).start()
