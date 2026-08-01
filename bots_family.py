@@ -905,11 +905,27 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
         unique_sheets = set(str(t.get('Target_Sheet')).strip() for t in valid_tasks)
         for s_name in unique_sheets: duplicate_and_push_down(s_name)
         
-        # Khởi tạo DrissionPage tối ưu siêu tốc (tắt hình ảnh, tắt thông báo)
+        # Khởi tạo DrissionPage tối ưu siêu tốc
         co = ChromiumOptions().headless()
+        
+        # --- BẮT ĐẦU ĐOẠN FIX LỖI SERVER ---
+        # 1. Tìm đường dẫn Chromium do Playwright vừa cài trên Render
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser_path = p.chromium.executable_path
+            co.set_browser_path(browser_path)
+            
+        # 2. CÁC LỆNH BẮT BUỘC để Chrome không bị crash (vỡ bộ nhớ) trên Server Linux
+        co.set_argument('--no-sandbox')
+        co.set_argument('--disable-dev-shm-usage')
+        co.set_argument('--disable-gpu')
+        # ------------------------------------
+        
+        # 3. Tối ưu tốc độ (chặn ảnh, tắt tiếng)
         co.set_argument('--mute-audio')
         co.set_pref('profile.default_content_setting_values.images', 2)
         co.set_pref('profile.default_content_setting_values.notifications', 2)
+        
         page = ChromiumPage(co)
         
         tasks_to_run = valid_tasks.copy()
