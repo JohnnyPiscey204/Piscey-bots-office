@@ -6,7 +6,6 @@ import telebot
 from telebot import types
 from dotenv import load_dotenv
 from oauth2client.service_account import ServiceAccountCredentials
-from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
 import re
 import traceback
@@ -22,7 +21,6 @@ import string
 import requests
 import base64
 from dateutil.relativedelta import relativedelta
-from DrissionPage import ChromiumPage, ChromiumOptions
 
 # =========================================================================
 # KHU VỰC 0: CẤU HÌNH HỆ THỐNG & KẾT NỐI CHUNG
@@ -830,6 +828,7 @@ TOKEN_CAOGIA = os.getenv("TOKEN_CAOGIA")
 bot_caogia = telebot.TeleBot(TOKEN_CAOGIA)
 
 SHEET_URL_CAOGIA = os.getenv("SHEET_URL_CAOGIA")
+SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY", "ee811480c36ac839eadfda36dca4b6f1")
 FILE_KEY_JSON_CAOGIA = 'creds_caogia.json'
 
 creds_caogia = ServiceAccountCredentials.from_json_keyfile_name(FILE_KEY_JSON_CAOGIA, scope)
@@ -953,26 +952,42 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
                 is_success = False
                 
                 try:
-                    page.get(url, timeout=15)
-                    price_element = page.ele(f'css:{css}', timeout=10) # Chống nhầm class của DrissionPage
+                    # GỌI QUA MÁY CHỦ CỦA SCRAPERAPI (Phiên bản tiết kiệm)
+                    payload = {
+                        'api_key': SCRAPER_API_KEY,
+                        'url': url,
+                        'render': 'true' # Lệnh chí mạng: Bắt ScraperAPI bật trình duyệt ngầm giải CAPTCHA & render giá
+                    }
                     
-                    if price_element:
-                        price = clean_price(price_element.text)
-                        he_so = task.get('He_So', 1) 
-                        try: he_so = int(he_so) if str(he_so).strip() != "" else 1
-                        except: he_so = 1
-                        price = price * he_so 
+                    # Chờ tối đa 45s vì API phải tải trình duyệt và vượt tường lửa
+                    response = requests.get('http://api.scraperapi.com/', params=payload, timeout=45)
+                    
+                    if response.status_code == 200:
+                        soup = BeautifulSoup(response.text, 'html.parser')
+                        price_element = soup.select_one(css)
                         
-                        val = "LIÊN HỆ" if price == 0 else price
-                        target_sheet.update_acell(cell, val)
-                        status_icon, result_text = "✅", f"Xong ({f'{val:,}'.replace(',', '.')} đ)" if isinstance(val, int) else "Xong (LIÊN HỆ)"
-                        is_success = True
+                        if price_element:
+                            price = clean_price(price_element.text)
+                            he_so = task.get('He_So', 1) 
+                            try: he_so = int(he_so) if str(he_so).strip() != "" else 1
+                            except: he_so = 1
+                            price = price * he_so 
+                            
+                            val = "LIÊN HỆ" if price == 0 else price
+                            target_sheet.update_acell(cell, val)
+                            status_icon = "✅"
+                            price_str = f"{val:,}".replace(",", ".") + " đ" if isinstance(val, int) else val
+                            result_text = f"Xong ({price_str})"
+                            is_success = True
+                        else:
+                            target_sheet.update_acell(cell, "LỖI CSS")
+                            status_icon, result_text = "❌", "Lỗi CSS"
                     else:
-                        target_sheet.update_acell(cell, "LỖI CSS")
-                        status_icon, result_text = "❌", "Lỗi CSS"
+                        target_sheet.update_acell(cell, "LỖI MẠNG")
+                        status_icon, result_text = "⚠️", f"Bị chặn (Lỗi API: {response.status_code})"
                 except Exception as e:
                     target_sheet.update_acell(cell, "LỖI MẠNG")
-                    status_icon, result_text = "⚠️", "Lỗi Kết Nối"
+                    status_icon, result_text = "⚠️", "Lỗi Kết Nối API"
                 
                 # Nếu cào thất bại, ném link đó vào danh sách để vòng sau cào lại
                 if not is_success:
@@ -1001,8 +1016,6 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
          bot_caogia.send_message(chat_id, f"❌ Sếp ơi code gãy rồi! Chi tiết:\n\n```python\n{error_detail[-3500:]}\n```", parse_mode="Markdown")
     finally:
         is_scraping = False
-        try: page.quit() # Đóng trình duyệt để xoá rác RAM
-        except: pass
 
 # --- (ĐOẠN CODE VẼ BIỂU ĐỒ GIỮ NGUYÊN) ---
 def generate_and_send_chart(chat_id, item_name):
