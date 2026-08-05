@@ -1317,11 +1317,12 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
                 
                 try:
                     if use_api:
-                        # Dùng ScraperAPI cho các trang khó
-                        payload = {'api_key': SCRAPER_API_KEY, 'url': url, 'render': 'true'}
-                        response = requests.get('http://api.scraperapi.com/', params=payload, timeout=90)
+                        # [PHỤC HỒI TỪ BẢN CŨ] Không dùng render, gọi qua HTTPS
+                        payload = {'api_key': SCRAPER_API_KEY, 'url': url}
+                        # Giữ timeout 90s để chống đứt gánh giữa chừng
+                        response = requests.get('https://api.scraperapi.com/', params=payload, timeout=90)
                     else:
-                        # Quét chay trực tiếp siêu tốc (Bản cũ sếp thích)
+                        # Quét chay trực tiếp siêu tốc (Hybrid Engine)
                         headers = {
                             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -1334,11 +1335,12 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
                         price_element = soup.select_one(css)
                         
                         if price_element:
-                            price = clean_price(price_element.text)
+                            # [PHỤC HỒI TỪ BẢN CŨ] Dùng get_text(strip=True) bóc giá chuẩn xác
+                            price = clean_price(price_element.get_text(strip=True))
                             he_so = task.get('He_So', 1) 
                             try: he_so = int(he_so) if str(he_so).strip() != "" else 1
                             except: he_so = 1
-                            price = price * he_so 
+                            price = price * he_so
                             
                             val = "LIÊN HỆ" if price == 0 else price
                             target_sheet.update_acell(cell, val)
