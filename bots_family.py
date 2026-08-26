@@ -987,8 +987,13 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
                 
         if not cancel_scraping:
             final_text = f"✅ **BÁO CÁO SẾP:** Đã chốt xong {campaign_name}!\n\nSố vòng quét đã chạy: {min(current_round, max_retries)}\nSố lượng shop bị xịt hoàn toàn: {len(failed_tasks)}\nBảng giá đã được cập nhật thành công!"
-            try: bot_caogia.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text=final_text, parse_mode="Markdown")
-            except: bot_caogia.send_message(chat_id, final_text, parse_mode="Markdown")
+            
+            # 1. Chuyển tin nhắn Loading trên cùng thành thông báo đã xong (cho đỡ rối)
+            try: bot_caogia.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text=f"🏁 Chiến dịch **{campaign_name}** đã hoàn tất! (Xem báo cáo bên dưới 👇)", parse_mode="Markdown")
+            except: pass
+            
+            # 2. Bắn hẳn một tin nhắn Báo Cáo mới toanh xuống dưới cùng của đoạn chat
+            bot_caogia.send_message(chat_id, final_text, parse_mode="Markdown")
     except Exception as e:
          error_detail = traceback.format_exc()
          bot_caogia.send_message(chat_id, f"❌ Sếp ơi code gãy rồi! Chi tiết:\n\n```python\n{error_detail[-3500:]}\n```", parse_mode="Markdown")
