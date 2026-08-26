@@ -829,7 +829,7 @@ TOKEN_CAOGIA = os.getenv("TOKEN_CAOGIA")
 bot_caogia = telebot.TeleBot(TOKEN_CAOGIA)
 
 SHEET_URL_CAOGIA = os.getenv("SHEET_URL_CAOGIA")
-SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY", "ee811480c36ac839eadfda36dca4b6f1")
+SCRAPINGBEE_API_KEY = os.getenv("SCRAPINGBEE_API_KEY")
 FILE_KEY_JSON_CAOGIA = 'creds_caogia.json'
 
 creds_caogia = ServiceAccountCredentials.from_json_keyfile_name(FILE_KEY_JSON_CAOGIA, scope)
@@ -988,9 +988,18 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
         if not cancel_scraping:
             final_text = f"✅ **BÁO CÁO SẾP:** Đã chốt xong {campaign_name}!\n\nSố vòng quét đã chạy: {min(current_round, max_retries)}\nSố lượng shop bị xịt hoàn toàn: {len(failed_tasks)}\nBảng giá đã được cập nhật thành công!"
             
-            # 1. Chuyển tin nhắn Loading trên cùng thành thông báo đã xong (cho đỡ rối)
             try: bot_caogia.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text=f"🏁 Chiến dịch **{campaign_name}** đã hoàn tất! (Xem báo cáo bên dưới 👇)", parse_mode="Markdown")
             except: pass
+
+            # 2. Bắn hẳn một tin nhắn Báo Cáo mới toanh xuống dưới cùng của đoạn chat            
+            bot_caogia.send_message(chat_id, final_text, parse_mode="Markdown")
+            
+        else:
+            # 3. Thông báo chốt hạ khi tiến trình thực sự bị phanh lại
+            try: bot_caogia.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text=f"⛔ Chiến dịch **{campaign_name}** ĐÃ BỊ HỦY!", parse_mode="Markdown", reply_markup=None)
+            except: pass
+            
+            bot_caogia.send_message(chat_id, f"⛔ **BÁO CÁO:** Trạm quét **{campaign_name}** đã dừng hoàn toàn các động cơ theo lệnh của sếp!", parse_mode="Markdown")
             
             # 2. Bắn hẳn một tin nhắn Báo Cáo mới toanh xuống dưới cùng của đoạn chat
             bot_caogia.send_message(chat_id, final_text, parse_mode="Markdown")
@@ -1218,6 +1227,11 @@ def callback_cancel_scrape(call):
     bot_caogia.answer_callback_query(call.id, "Đã nhận lệnh phanh gấp!")
     if is_scraping:
         cancel_scraping = True
+        
+        # 1. Gỡ ngay cái nút bấm Hủy Cào Giá để người dùng không bấm đúp được nữa
+        try: bot_caogia.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except: pass
+        
         bot_caogia.send_message(call.message.chat.id, "🛑 **ĐÃ NHẬN LỆNH HỦY!**\nĐang tiến hành phanh gấp các luồng quét, sếp chờ vài giây nhé...")
     else:
         bot_caogia.send_message(call.message.chat.id, "⚪ Hiện không có tiến trình cào giá nào đang chạy.")
@@ -1322,10 +1336,14 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
                 
                 try:
                     if use_api:
-                        # [PHỤC HỒI TỪ BẢN CŨ] Không dùng render, gọi qua HTTPS
-                        payload = {'api_key': SCRAPER_API_KEY, 'url': url}
-                        # Giữ timeout 90s để chống đứt gánh giữa chừng
-                        response = requests.get('https://api.scraperapi.com/', params=payload, timeout=90)
+                        # Chuyển sang dùng ScrapingBee, bật render_js để vượt rào
+                        payload = {
+                            'api_key': SCRAPINGBEE_API_KEY, 
+                            'url': url,
+                            'render_js': 'True'
+                        }
+                        # Endpoint chuẩn của ScrapingBee
+                        response = requests.get('https://app.scrapingbee.com/api/v1/', params=payload, timeout=90)
                     else:
                         # Quét chay trực tiếp siêu tốc (Hybrid Engine)
                         headers = {
@@ -1372,7 +1390,9 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
                     if completed_count % 3 == 0 or completed_count == len(tasks_to_run) or cancel_scraping:
                         recent_reports = "\n".join(report_lines[-5:])
                         status_text = f"🔄 TIẾN TRÌNH VÒNG {current_round}: [{completed_count}/{len(tasks_to_run)}]\n\nTrạng thái gần nhất:\n{recent_reports}"
-                        try: bot_caogia.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text=status_text, reply_markup=markup)
+                        # Nếu đang bị hủy thì không gắn lại nút nữa
+                        current_markup = markup if not cancel_scraping else None
+                        try: bot_caogia.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text=status_text, reply_markup=current_markup)
                         except: pass
             
             # Vòng 1 quét siêu tốc mở 5 luồng. Vòng 2 dùng API thì chạy 1 luồng để tránh nghẽn.
@@ -1390,8 +1410,13 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
                 
         if not cancel_scraping:
             final_text = f"✅ **BÁO CÁO SẾP:** Đã chốt xong {campaign_name}!\n\nSố vòng quét đã chạy: {min(current_round, max_retries)}\nSố lượng shop bị xịt hoàn toàn: {len(failed_tasks)}\nBảng giá đã được cập nhật thành công!"
-            try: bot_caogia.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text=final_text, parse_mode="Markdown")
-            except: bot_caogia.send_message(chat_id, final_text, parse_mode="Markdown")
+            
+            # 1. Chuyển tin nhắn Loading trên cùng thành thông báo đã xong (cho đỡ rối)
+            try: bot_caogia.edit_message_text(chat_id=chat_id, message_id=progress_msg.message_id, text=f"🏁 Chiến dịch **{campaign_name}** đã hoàn tất! (Xem báo cáo bên dưới 👇)", parse_mode="Markdown")
+            except: pass
+            
+            # 2. Bắn hẳn một tin nhắn Báo Cáo mới toanh xuống dưới cùng của đoạn chat
+            bot_caogia.send_message(chat_id, final_text, parse_mode="Markdown")
     except Exception as e:
          error_detail = traceback.format_exc()
          bot_caogia.send_message(chat_id, f"❌ Sếp ơi code gãy rồi! Chi tiết:\n\n```python\n{error_detail[-3500:]}\n```", parse_mode="Markdown")
