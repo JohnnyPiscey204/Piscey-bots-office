@@ -829,8 +829,9 @@ TOKEN_CAOGIA = os.getenv("TOKEN_CAOGIA")
 bot_caogia = telebot.TeleBot(TOKEN_CAOGIA)
 
 SHEET_URL_CAOGIA = os.getenv("SHEET_URL_CAOGIA")
-SCRAPEDO_TOKEN = os.getenv("SCRAPEDO_TOKEN")
 FILE_KEY_JSON_CAOGIA = 'creds_caogia.json'
+API_KEY_CAOGIA = os.getenv("API_KEY_CAOGIA") 
+API_URL_CAOGIA = os.getenv("API_URL_CAOGIA", "http://api.scraperapi.com/")
 
 creds_caogia = ServiceAccountCredentials.from_json_keyfile_name(FILE_KEY_JSON_CAOGIA, scope)
 client_caogia = gspread.authorize(creds_caogia)
@@ -1199,12 +1200,17 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
                 
                 try:
                     if use_api:
-                        # Gọi qua Scrape.do (Tự động bypass Cloudflare & render)
-                        payload = {
-                            'token': SCRAPEDO_TOKEN,
-                            'url': url
-                        }
-                        response = requests.get('http://api.scrape.do', params=payload, timeout=60)
+                        # BỘ LỌC TỰ ĐỘNG NHẬN DIỆN HÃNG API VÀ LẮP CHUẨN THAM SỐ
+                        if "scrape.do" in API_URL_CAOGIA:
+                            payload = {'token': API_KEY_CAOGIA, 'url': url}
+                        elif "scrapingbee.com" in API_URL_CAOGIA:
+                            payload = {'api_key': API_KEY_CAOGIA, 'url': url, 'render_js': 'True'}
+                        else:
+                            # Mặc định dội về ScraperAPI (hoặc các hãng xài chung cú pháp)
+                            payload = {'api_key': API_KEY_CAOGIA, 'url': url, 'render': 'true'}
+                        
+                        # GỌI API BẰNG LINK ĐÃ CẤU HÌNH BÊN NGOÀI
+                        response = requests.get(API_URL_CAOGIA, params=payload, timeout=60)
                     else:
                         # Quét chay trực tiếp siêu tốc (Hybrid Engine)
                         headers = {
