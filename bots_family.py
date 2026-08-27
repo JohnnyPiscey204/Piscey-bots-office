@@ -829,7 +829,7 @@ TOKEN_CAOGIA = os.getenv("TOKEN_CAOGIA")
 bot_caogia = telebot.TeleBot(TOKEN_CAOGIA)
 
 SHEET_URL_CAOGIA = os.getenv("SHEET_URL_CAOGIA")
-SCRAPINGBEE_API_KEY = os.getenv("SCRAPINGBEE_API_KEY")
+SCRAPEDO_TOKEN = os.getenv("SCRAPEDO_TOKEN")
 FILE_KEY_JSON_CAOGIA = 'creds_caogia.json'
 
 creds_caogia = ServiceAccountCredentials.from_json_keyfile_name(FILE_KEY_JSON_CAOGIA, scope)
@@ -1199,14 +1199,12 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
                 
                 try:
                     if use_api:
-                        # Chuyển sang dùng ScrapingBee, bật render_js để vượt rào
+                        # Gọi qua Scrape.do (Tự động bypass Cloudflare & render)
                         payload = {
-                            'api_key': SCRAPINGBEE_API_KEY, 
-                            'url': url,
-                            'render_js': 'True'
+                            'token': SCRAPEDO_TOKEN,
+                            'url': url
                         }
-                        # Endpoint chuẩn của ScrapingBee
-                        response = requests.get('https://app.scrapingbee.com/api/v1/', params=payload, timeout=90)
+                        response = requests.get('http://api.scrape.do', params=payload, timeout=60)
                     else:
                         # Quét chay trực tiếp siêu tốc (Hybrid Engine)
                         headers = {
