@@ -1202,15 +1202,20 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
                     if use_api:
                         # BỘ LỌC TỰ ĐỘNG NHẬN DIỆN HÃNG API VÀ LẮP CHUẨN THAM SỐ
                         if "scrape.do" in API_URL_CAOGIA:
-                            # Đã bổ sung cờ render=true cho Scrape.do
                             payload = {'token': API_KEY_CAOGIA, 'url': url, 'render': 'true'}
                         elif "scrapingbee.com" in API_URL_CAOGIA:
                             payload = {'api_key': API_KEY_CAOGIA, 'url': url, 'render_js': 'True'}
                         else:
-                            # Mặc định dội về ScraperAPI
-                            payload = {'api_key': API_KEY_CAOGIA, 'url': url, 'render': 'true'}
+                            # Tăng hỏa lực cho ScraperAPI: Bật Premium Proxy và ép IP Việt Nam
+                            payload = {
+                                'api_key': API_KEY_CAOGIA, 
+                                'url': url, 
+                                'render': 'true',
+                                'premium': 'true', # Vũ khí xuyên thủng Cloudflare
+                                'country_code': 'vn' # Ép dùng IP Việt Nam cho chuẩn bài
+                            }
                         
-                        # GỌI API BẰNG LINK ĐÃ CẤU HÌNH (Tăng timeout lên 90s để chống kẹt mạng)
+                        # GỌI API BẰNG LINK ĐÃ CẤU HÌNH BÊN NGOÀI
                         response = requests.get(API_URL_CAOGIA, params=payload, timeout=90)
                     else:
                         # Quét chay trực tiếp siêu tốc (Hybrid Engine)
