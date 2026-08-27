@@ -1202,15 +1202,16 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
                     if use_api:
                         # BỘ LỌC TỰ ĐỘNG NHẬN DIỆN HÃNG API VÀ LẮP CHUẨN THAM SỐ
                         if "scrape.do" in API_URL_CAOGIA:
-                            payload = {'token': API_KEY_CAOGIA, 'url': url}
+                            # Đã bổ sung cờ render=true cho Scrape.do
+                            payload = {'token': API_KEY_CAOGIA, 'url': url, 'render': 'true'}
                         elif "scrapingbee.com" in API_URL_CAOGIA:
                             payload = {'api_key': API_KEY_CAOGIA, 'url': url, 'render_js': 'True'}
                         else:
-                            # Mặc định dội về ScraperAPI (hoặc các hãng xài chung cú pháp)
+                            # Mặc định dội về ScraperAPI
                             payload = {'api_key': API_KEY_CAOGIA, 'url': url, 'render': 'true'}
                         
-                        # GỌI API BẰNG LINK ĐÃ CẤU HÌNH BÊN NGOÀI
-                        response = requests.get(API_URL_CAOGIA, params=payload, timeout=60)
+                        # GỌI API BẰNG LINK ĐÃ CẤU HÌNH (Tăng timeout lên 90s để chống kẹt mạng)
+                        response = requests.get(API_URL_CAOGIA, params=payload, timeout=90)
                     else:
                         # Quét chay trực tiếp siêu tốc (Hybrid Engine)
                         headers = {
