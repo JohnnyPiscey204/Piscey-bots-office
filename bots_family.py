@@ -1382,16 +1382,22 @@ def check_salary(message):
         now = datetime.now()
         b1_val = sheet_dash.acell('B1').value 
         b2_val = sheet_dash.acell('B2').value 
-        d1, m1 = map(int, b1_val.split('/'))
-        d2, m2 = map(int, b2_val.split('/'))
+        
+        # Bắt lỗi an toàn nếu định dạng là DD/MM hoặc DD/MM/YYYY
+        d1, m1 = map(int, b1_val.split('/')[0:2])
+        d2, m2 = map(int, b2_val.split('/')[0:2])
         y1 = now.year
         y2 = now.year if m2 >= m1 else now.year + 1
         start_date = datetime(y1, m1, d1)
         end_date = datetime(y2, m2, d2)
+        
+        # 1. DÒ TÌM ĐỘNG: QUÉT ĐÚNG CỘT A ĐỂ TÌM LƯƠNG HIỆN TẠI
         try:
-            cell_tong_luong = sheet_dash.find("Tổng lương thực nhận sau BHXH")
-            luong_raw = sheet_dash.cell(cell_tong_luong.row, 2).value
+            a_col = sheet_dash.col_values(1) # Rút toàn bộ Cột A
+            row_idx = a_col.index("Tổng lương thực nhận sau BHXH") + 1
+            luong_raw = sheet_dash.cell(row_idx, 2).value
         except: luong_raw = "0"
+        
         if now.date() > end_date.date():
             ten_ky_luong = f"Tháng {end_date.month:02d} ({start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')})"
             luong_du_tinh = int(re.sub(r'[^\d]', '', str(luong_raw))) if luong_raw else 0
@@ -1404,25 +1410,57 @@ def check_salary(message):
             sheet_hist.update_cell(row_to_write, 1, ten_ky_luong)
             sheet_hist.update_cell(row_to_write, 2, luong_du_tinh) 
             if row_to_write == next_row: sheet_hist.update_cell(row_to_write, 5, "Chờ xác nhận ⏳")
+            
+            # --- TỰ ĐỘNG BÊ NGUYÊN FORM TỪ A:B SANG J:K KHI CHỐT SỔ ---
+            try:
+                sheet_id = sheet_dash.id
+                requests_batch = [
+                    {"copyPaste": {
+                        "source": {"sheetId": sheet_id, "startColumnIndex": 0, "endColumnIndex": 2, "startRowIndex": 0, "endRowIndex": 50},
+                        "destination": {"sheetId": sheet_id, "startColumnIndex": 9, "endColumnIndex": 11, "startRowIndex": 0, "endRowIndex": 50},
+                        "pasteType": "PASTE_VALUES" # Dán Giá trị
+                    }},
+                    {"copyPaste": {
+                        "source": {"sheetId": sheet_id, "startColumnIndex": 0, "endColumnIndex": 2, "startRowIndex": 0, "endRowIndex": 50},
+                        "destination": {"sheetId": sheet_id, "startColumnIndex": 9, "endColumnIndex": 11, "startRowIndex": 0, "endRowIndex": 50},
+                        "pasteType": "PASTE_FORMAT" # Dán Form màu sắc/kẻ bảng
+                    }}
+                ]
+                spreadsheet_johnny.batch_update({'requests': requests_batch})
+            except Exception as e:
+                print(f"Lỗi auto-copy layout: {e}")
+            # -----------------------------------------------------------
+            
             new_start = end_date + timedelta(days=1)
             new_end = new_start + relativedelta(months=1) - timedelta(days=1)
-            sheet_dash.update_cell(1, 2, new_start.strftime("%d/%m"))
-            sheet_dash.update_cell(2, 2, new_end.strftime("%d/%m"))
-            bot_johnny.send_message(message.chat.id, f"🎊 **KẾT THÚC KỲ LƯƠNG!**\n✅ Đã tự động chốt {ten_ky_luong} vào sổ cái. Trạng thái: Chờ ting ting!", parse_mode='Markdown')
+            sheet_dash.update_cell(1, 2, new_start.strftime("%d/%m/%Y"))
+            sheet_dash.update_cell(2, 2, new_end.strftime("%d/%m/%Y"))
+            bot_johnny.send_message(message.chat.id, f"🎊 **KẾT THÚC KỲ LƯƠNG!**\n✅ Đã tự động chốt {ten_ky_luong} vào sổ cái. Form bảng điểm đã được lưu trữ!\nTrạng thái: Chờ ting ting!", parse_mode='Markdown')
             start_date, end_date = new_start, new_end
             b2_val = new_end.strftime("%d/%m")
             time.sleep(2)
+            
             try:
-                cell_tong_luong = sheet_dash.find("Tổng lương thực nhận sau BHXH")
-                thuc_nhan = sheet_dash.cell(cell_tong_luong.row, 2).value
+                a_col = sheet_dash.col_values(1)
+                row_idx = a_col.index("Tổng lương thực nhận sau BHXH") + 1
+                thuc_nhan = sheet_dash.cell(row_idx, 2).value
             except: thuc_nhan = "0 đ"
         else: thuc_nhan = luong_raw 
-        luong_ky_truoc = sheet_dash.acell('E3').value
+        
+        # 2. DÒ TÌM ĐỘNG: QUÉT ĐÚNG CỘT J ĐỂ TÌM LƯƠNG KỲ TRƯỚC
+        try:
+            j_col = sheet_dash.col_values(10) # Rút toàn bộ Cột 10 (Cột J)
+            row_idx_cu = j_col.index("Tổng lương thực nhận sau BHXH") + 1
+            luong_ky_truoc = sheet_dash.cell(row_idx_cu, 11).value # Cột 11 là cột K
+        except: 
+            luong_ky_truoc = "0"
+
         def get_payday(target_month, target_year):
             payday = datetime(target_year, target_month, 10).date()
             if payday.weekday() == 5: payday -= timedelta(days=1)
             elif payday.weekday() == 6: payday += timedelta(days=1)
             return payday
+            
         thang_nay = end_date.month
         thang_truoc = thang_nay - 1 if thang_nay > 1 else 12
         payday_truoc = get_payday(end_date.month, end_date.year) 
@@ -1431,6 +1469,7 @@ def check_salary(message):
         payday_nay = get_payday(next_month, next_year) 
         ngay_chot_luong = max(0, (end_date.date() - now.date()).days)
         delta_nhan_nay = (payday_nay - now.date()).days
+        
         try:
             clean_luong_truoc = int(re.sub(r'[^\d]', '', str(luong_ky_truoc))) if luong_ky_truoc else 0
             all_hist = sheet_hist.get_all_values()
@@ -1441,6 +1480,7 @@ def check_salary(message):
                     if current_du_tinh_in_hist != clean_luong_truoc: sheet_hist.update_cell(i + 1, 2, clean_luong_truoc)
                     break
         except: pass 
+        
         response = "💰 **BÁO CÁO TÀI CHÍNH**\n━━━━━━━━━━━━━━━━━━\n"
         if now.date() <= payday_truoc:
             delta_nhan_truoc = (payday_truoc - now.date()).days
