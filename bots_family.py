@@ -829,9 +829,8 @@ TOKEN_CAOGIA = os.getenv("TOKEN_CAOGIA")
 bot_caogia = telebot.TeleBot(TOKEN_CAOGIA)
 
 SHEET_URL_CAOGIA = os.getenv("SHEET_URL_CAOGIA")
+SCRAPINGBEE_API_KEY = os.getenv("SCRAPINGBEE_API_KEY")
 FILE_KEY_JSON_CAOGIA = 'creds_caogia.json'
-API_KEY_CAOGIA = os.getenv("API_KEY_CAOGIA") 
-API_URL_CAOGIA = os.getenv("API_URL_CAOGIA", "http://api.scraperapi.com/")
 
 creds_caogia = ServiceAccountCredentials.from_json_keyfile_name(FILE_KEY_JSON_CAOGIA, scope)
 client_caogia = gspread.authorize(creds_caogia)
@@ -1200,23 +1199,14 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
                 
                 try:
                     if use_api:
-                        # BỘ LỌC TỰ ĐỘNG NHẬN DIỆN HÃNG API VÀ LẮP CHUẨN THAM SỐ
-                        if "scrape.do" in API_URL_CAOGIA:
-                            payload = {'token': API_KEY_CAOGIA, 'url': url, 'render': 'true'}
-                        elif "scrapingbee.com" in API_URL_CAOGIA:
-                            payload = {'api_key': API_KEY_CAOGIA, 'url': url, 'render_js': 'True'}
-                        else:
-                            # Tăng hỏa lực cho ScraperAPI: Bật Premium Proxy và ép IP Việt Nam
-                            payload = {
-                                'api_key': API_KEY_CAOGIA, 
-                                'url': url, 
-                                'render': 'true',
-                                'premium': 'true', # Vũ khí xuyên thủng Cloudflare
-                                'country_code': 'vn' # Ép dùng IP Việt Nam cho chuẩn bài
-                            }
-                        
-                        # GỌI API BẰNG LINK ĐÃ CẤU HÌNH BÊN NGOÀI
-                        response = requests.get(API_URL_CAOGIA, params=payload, timeout=90)
+                        # Chuyển sang dùng ScrapingBee, bật render_js để vượt rào
+                        payload = {
+                            'api_key': SCRAPINGBEE_API_KEY, 
+                            'url': url,
+                            'render_js': 'True'
+                        }
+                        # Endpoint chuẩn của ScrapingBee
+                        response = requests.get('https://app.scrapingbee.com/api/v1/', params=payload, timeout=90)
                     else:
                         # Quét chay trực tiếp siêu tốc (Hybrid Engine)
                         headers = {
