@@ -829,8 +829,9 @@ TOKEN_CAOGIA = os.getenv("TOKEN_CAOGIA")
 bot_caogia = telebot.TeleBot(TOKEN_CAOGIA)
 
 SHEET_URL_CAOGIA = os.getenv("SHEET_URL_CAOGIA")
-SCRAPINGBEE_API_KEY = os.getenv("SCRAPINGBEE_API_KEY")
 FILE_KEY_JSON_CAOGIA = 'creds_caogia.json'
+API_KEY_CAOGIA = os.getenv("API_KEY_CAOGIA") 
+API_URL_CAOGIA = os.getenv("API_URL_CAOGIA", "http://api.scraperapi.com/")
 
 creds_caogia = ServiceAccountCredentials.from_json_keyfile_name(FILE_KEY_JSON_CAOGIA, scope)
 client_caogia = gspread.authorize(creds_caogia)
@@ -1049,7 +1050,8 @@ def callback_auto_config(call):
         
     if action == "testnow":
         bot_caogia.answer_callback_query(call.id, "Kích hoạt test thủ công...")
-        bot_caogia.delete_message(chat_id, call.message.message_id)
+        try: bot_caogia.delete_message(chat_id, call.message.message_id)
+        except: pass # Bịt lỗi
         bot_caogia.send_message(chat_id, "🧪 **CHẾ ĐỘ TEST THỦ CÔNG:** Đang kích hoạt...", parse_mode="Markdown")
         # Gửi cờ is_auto=False để nếu bận nó nhả tin nhắn cảnh báo ra chat
         threading.Thread(target=run_scraper_process, args=(chat_id, "all", False)).start()
@@ -1074,14 +1076,16 @@ def callback_auto_config(call):
 def callback_chart_query(call):
     item_name = call.data.replace('chart_', '')
     bot_caogia.answer_callback_query(call.id, "Đang vẽ biểu đồ...") 
-    bot_caogia.delete_message(call.message.chat.id, call.message.message_id) 
+    try: bot_caogia.delete_message(call.message.chat.id, call.message.message_id) 
+    except: pass # Bịt lỗi xoá tin nhắn cũ
     generate_and_send_chart(call.message.chat.id, item_name)
 
 @bot_caogia.callback_query_handler(func=lambda call: call.data.startswith('scan_'))
 def callback_scan_query(call):
-    bot_caogia.answer_callback_query(call.id, "Đang khởi động trạm quét...") # Vá lỗi chớp UI
+    bot_caogia.answer_callback_query(call.id, "Đang khởi động trạm quét...") 
     scan_type = call.data.replace('scan_', '')
-    bot_caogia.delete_message(call.message.chat.id, call.message.message_id) 
+    try: bot_caogia.delete_message(call.message.chat.id, call.message.message_id) 
+    except: pass # Bịt lỗi
     threading.Thread(target=run_scraper_process, args=(call.message.chat.id, scan_type)).start()
 
 @bot_caogia.callback_query_handler(func=lambda call: call.data == 'cancel_scrape')
@@ -1199,14 +1203,23 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
                 
                 try:
                     if use_api:
-                        # Chuyển sang dùng ScrapingBee, bật render_js để vượt rào
-                        payload = {
-                            'api_key': SCRAPINGBEE_API_KEY, 
-                            'url': url,
-                            'render_js': 'True'
-                        }
-                        # Endpoint chuẩn của ScrapingBee
-                        response = requests.get('https://app.scrapingbee.com/api/v1/', params=payload, timeout=90)
+                        # BỘ LỌC TỰ ĐỘNG NHẬN DIỆN HÃNG API VÀ LẮP CHUẨN THAM SỐ
+                        if "scrape.do" in API_URL_CAOGIA:
+                            payload = {'token': API_KEY_CAOGIA, 'url': url, 'render': 'true'}
+                        elif "scrapingbee.com" in API_URL_CAOGIA:
+                            payload = {'api_key': API_KEY_CAOGIA, 'url': url, 'render_js': 'True'}
+                        else:
+                            # Tăng hỏa lực cho ScraperAPI: Bật Premium Proxy và ép IP Việt Nam
+                            payload = {
+                                'api_key': API_KEY_CAOGIA, 
+                                'url': url, 
+                                'render': 'true',
+                                'premium': 'true', # Vũ khí xuyên thủng Cloudflare
+                                'country_code': 'vn' # Ép dùng IP Việt Nam cho chuẩn bài
+                            }
+                        
+                        # GỌI API BẰNG LINK ĐÃ CẤU HÌNH BÊN NGOÀI
+                        response = requests.get(API_URL_CAOGIA, params=payload, timeout=90)
                     else:
                         # Quét chay trực tiếp siêu tốc (Hybrid Engine)
                         headers = {
@@ -1372,16 +1385,22 @@ def check_salary(message):
         now = datetime.now()
         b1_val = sheet_dash.acell('B1').value 
         b2_val = sheet_dash.acell('B2').value 
-        d1, m1 = map(int, b1_val.split('/'))
-        d2, m2 = map(int, b2_val.split('/'))
+        
+        # Bắt lỗi an toàn nếu định dạng là DD/MM hoặc DD/MM/YYYY
+        d1, m1 = map(int, b1_val.split('/')[0:2])
+        d2, m2 = map(int, b2_val.split('/')[0:2])
         y1 = now.year
         y2 = now.year if m2 >= m1 else now.year + 1
         start_date = datetime(y1, m1, d1)
         end_date = datetime(y2, m2, d2)
+        
+        # 1. DÒ TÌM ĐỘNG: QUÉT ĐÚNG CỘT A ĐỂ TÌM LƯƠNG HIỆN TẠI
         try:
-            cell_tong_luong = sheet_dash.find("Tổng lương thực nhận sau BHXH")
-            luong_raw = sheet_dash.cell(cell_tong_luong.row, 2).value
+            a_col = sheet_dash.col_values(1) # Rút toàn bộ Cột A
+            row_idx = a_col.index("Tổng lương thực nhận sau BHXH") + 1
+            luong_raw = sheet_dash.cell(row_idx, 2).value
         except: luong_raw = "0"
+        
         if now.date() > end_date.date():
             ten_ky_luong = f"Tháng {end_date.month:02d} ({start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')})"
             luong_du_tinh = int(re.sub(r'[^\d]', '', str(luong_raw))) if luong_raw else 0
@@ -1394,25 +1413,57 @@ def check_salary(message):
             sheet_hist.update_cell(row_to_write, 1, ten_ky_luong)
             sheet_hist.update_cell(row_to_write, 2, luong_du_tinh) 
             if row_to_write == next_row: sheet_hist.update_cell(row_to_write, 5, "Chờ xác nhận ⏳")
+            
+            # --- TỰ ĐỘNG BÊ NGUYÊN FORM TỪ A:B SANG J:K KHI CHỐT SỔ ---
+            try:
+                sheet_id = sheet_dash.id
+                requests_batch = [
+                    {"copyPaste": {
+                        "source": {"sheetId": sheet_id, "startColumnIndex": 0, "endColumnIndex": 2, "startRowIndex": 0, "endRowIndex": 50},
+                        "destination": {"sheetId": sheet_id, "startColumnIndex": 9, "endColumnIndex": 11, "startRowIndex": 0, "endRowIndex": 50},
+                        "pasteType": "PASTE_VALUES" # Dán Giá trị
+                    }},
+                    {"copyPaste": {
+                        "source": {"sheetId": sheet_id, "startColumnIndex": 0, "endColumnIndex": 2, "startRowIndex": 0, "endRowIndex": 50},
+                        "destination": {"sheetId": sheet_id, "startColumnIndex": 9, "endColumnIndex": 11, "startRowIndex": 0, "endRowIndex": 50},
+                        "pasteType": "PASTE_FORMAT" # Dán Form màu sắc/kẻ bảng
+                    }}
+                ]
+                spreadsheet_johnny.batch_update({'requests': requests_batch})
+            except Exception as e:
+                print(f"Lỗi auto-copy layout: {e}")
+            # -----------------------------------------------------------
+            
             new_start = end_date + timedelta(days=1)
             new_end = new_start + relativedelta(months=1) - timedelta(days=1)
-            sheet_dash.update_cell(1, 2, new_start.strftime("%d/%m"))
-            sheet_dash.update_cell(2, 2, new_end.strftime("%d/%m"))
-            bot_johnny.send_message(message.chat.id, f"🎊 **KẾT THÚC KỲ LƯƠNG!**\n✅ Đã tự động chốt {ten_ky_luong} vào sổ cái. Trạng thái: Chờ ting ting!", parse_mode='Markdown')
+            sheet_dash.update_cell(1, 2, new_start.strftime("%d/%m/%Y"))
+            sheet_dash.update_cell(2, 2, new_end.strftime("%d/%m/%Y"))
+            bot_johnny.send_message(message.chat.id, f"🎊 **KẾT THÚC KỲ LƯƠNG!**\n✅ Đã tự động chốt {ten_ky_luong} vào sổ cái. Form bảng điểm đã được lưu trữ!\nTrạng thái: Chờ ting ting!", parse_mode='Markdown')
             start_date, end_date = new_start, new_end
             b2_val = new_end.strftime("%d/%m")
             time.sleep(2)
+            
             try:
-                cell_tong_luong = sheet_dash.find("Tổng lương thực nhận sau BHXH")
-                thuc_nhan = sheet_dash.cell(cell_tong_luong.row, 2).value
+                a_col = sheet_dash.col_values(1)
+                row_idx = a_col.index("Tổng lương thực nhận sau BHXH") + 1
+                thuc_nhan = sheet_dash.cell(row_idx, 2).value
             except: thuc_nhan = "0 đ"
         else: thuc_nhan = luong_raw 
-        luong_ky_truoc = sheet_dash.acell('E3').value
+        
+        # 2. DÒ TÌM ĐỘNG: QUÉT ĐÚNG CỘT J ĐỂ TÌM LƯƠNG KỲ TRƯỚC
+        try:
+            j_col = sheet_dash.col_values(10) # Rút toàn bộ Cột 10 (Cột J)
+            row_idx_cu = j_col.index("Tổng lương thực nhận sau BHXH") + 1
+            luong_ky_truoc = sheet_dash.cell(row_idx_cu, 11).value # Cột 11 là cột K
+        except: 
+            luong_ky_truoc = "0"
+
         def get_payday(target_month, target_year):
             payday = datetime(target_year, target_month, 10).date()
             if payday.weekday() == 5: payday -= timedelta(days=1)
             elif payday.weekday() == 6: payday += timedelta(days=1)
             return payday
+            
         thang_nay = end_date.month
         thang_truoc = thang_nay - 1 if thang_nay > 1 else 12
         payday_truoc = get_payday(end_date.month, end_date.year) 
@@ -1421,6 +1472,7 @@ def check_salary(message):
         payday_nay = get_payday(next_month, next_year) 
         ngay_chot_luong = max(0, (end_date.date() - now.date()).days)
         delta_nhan_nay = (payday_nay - now.date()).days
+        
         try:
             clean_luong_truoc = int(re.sub(r'[^\d]', '', str(luong_ky_truoc))) if luong_ky_truoc else 0
             all_hist = sheet_hist.get_all_values()
@@ -1431,6 +1483,7 @@ def check_salary(message):
                     if current_du_tinh_in_hist != clean_luong_truoc: sheet_hist.update_cell(i + 1, 2, clean_luong_truoc)
                     break
         except: pass 
+        
         response = "💰 **BÁO CÁO TÀI CHÍNH**\n━━━━━━━━━━━━━━━━━━\n"
         if now.date() <= payday_truoc:
             delta_nhan_truoc = (payday_truoc - now.date()).days
@@ -1546,7 +1599,9 @@ def generate_budget_report(chat_id, month_str):
                 break
         if luong_thang_truoc == 0:
             b2_val = sheet_dash.acell('B2').value
-            _, m_dash = map(int, b2_val.split('/'))
+            try: _, m_dash = map(int, b2_val.split('/')[0:2]) # Fix lỗi lấy dư Năm
+            except: m_dash = 0
+            
             if prev_m == m_dash and prev_y == now.year:
                 try:
                     cell_tong_luong = sheet_dash.find("Tổng lương thực nhận sau BHXH")
@@ -1762,8 +1817,8 @@ def handle_stats(call):
                 if len(row) >= 5 and f"/{target_year}" in row[1] and ("✅" in row[4] or "xong" in row[4].lower()):
                     try: tong_chi_thuc += int(re.sub(r'[^\d]', '', str(row[3])))
                     except: pass
-            msg = f"📆 **BỨC TRANH TÀI CHÍNH NĂM {target_year}**\n━━━━━━━━━━━━━━━━━━\n💵 **Tổng cày cuốc:** `{format_vnd(tong_thu)} đ`\n💸 **Đã thực chi:** `{format_vnd(tong_chi_thuc)} đ`\n"
-            bot_johnny.edit_message_text(msg, chat_id, msg_id, parse_mode='Markdown')
+            msg = f"📆 <b>BỨC TRANH TÀI CHÍNH NĂM {target_year}</b>\n━━━━━━━━━━━━━━━━━━\n💵 <b>Tổng cày cuốc:</b> <code>{format_vnd(tong_thu)} đ</code>\n💸 <b>Đã thực chi:</b> <code>{format_vnd(tong_chi_thuc)} đ</code>\n"
+            bot_johnny.edit_message_text(msg, chat_id, msg_id, parse_mode='HTML')
         except Exception as e:
             bot_johnny.edit_message_text(f"❌ Lỗi tính toán năm: {e}", chat_id, msg_id)
     elif call.data == 'stats_list_month':
@@ -1780,12 +1835,12 @@ def handle_stats(call):
             markup = types.InlineKeyboardMarkup(row_width=3)
             markup.add(*[types.InlineKeyboardButton(m.replace("Tháng ", ""), callback_data=f"stmonth_{m.replace('Tháng ', '')}") for m in months[:12]])
             markup.add(types.InlineKeyboardButton("❌ Huỷ", callback_data="stats_cancel"))
-            bot_johnny.edit_message_text("📅 **Chọn tháng sếp muốn xem tổng quan:**", chat_id, msg_id, reply_markup=markup, parse_mode='Markdown')
+            bot_johnny.edit_message_text("📅 <b>Chọn tháng sếp muốn xem tổng quan:</b>", chat_id, msg_id, reply_markup=markup, parse_mode='HTML')
         except Exception as e:
             bot_johnny.edit_message_text(f"❌ Lỗi tải danh sách tháng: {e}", chat_id, msg_id)
     elif call.data.startswith('stmonth_'):
         target_ky = f"Tháng {call.data.replace('stmonth_', '')}"
-        bot_johnny.edit_message_text(f"⏳ Đang tổng hợp dữ liệu **{target_ky}**...", chat_id, msg_id, parse_mode='Markdown')
+        bot_johnny.edit_message_text(f"⏳ Đang tổng hợp dữ liệu <b>{target_ky}</b>...", chat_id, msg_id, parse_mode='HTML')
         try:
             tong_thu = 0; tong_chi = 0
             for row in sheet_hist.get_all_values()[1:]:
@@ -1798,8 +1853,8 @@ def handle_stats(call):
                 if len(row) >= 5 and row[1] == target_ky and ("✅" in row[4] or "xong" in row[4].lower()):
                     try: tong_chi += int(re.sub(r'[^\d]', '', str(row[3])))
                     except: pass
-            msg = f"📅 **THỐNG KÊ {target_ky}**\n━━━━━━━━━━━━━━━━━━\n💵 **Thu nhập:** `{format_vnd(tong_thu)} đ`\n💸 **Đã thực chi:** `{format_vnd(tong_chi)} đ`\n"
-            bot_johnny.edit_message_text(msg, chat_id, msg_id, parse_mode='Markdown')
+            msg = f"📅 <b>THỐNG KÊ {target_ky}</b>\n━━━━━━━━━━━━━━━━━━\n💵 <b>Thu nhập:</b> <code>{format_vnd(tong_thu)} đ</code>\n💸 <b>Đã thực chi:</b> <code>{format_vnd(tong_chi)} đ</code>\n"
+            bot_johnny.edit_message_text(msg, chat_id, msg_id, parse_mode='HTML')
         except Exception as e:
             bot_johnny.edit_message_text(f"❌ Lỗi báo cáo tháng: {e}", chat_id, msg_id)
     elif call.data == 'stats_list_hash':
