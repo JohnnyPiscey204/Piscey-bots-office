@@ -1303,10 +1303,10 @@ def run_scraper_process(chat_id, scan_type="all", is_auto=False):
 # =========================================================================
 # KHU VỰC 3: BOT LƯƠNG JOHNNY
 # =========================================================================
-TOKEN_JOHNNY = os.getenv("TOKEN_JOHNNY", "8611295413:AAFhA75QnwPR6zWvuouHDZEZKeRKkHEA_d4")
+TOKEN_JOHNNY = os.getenv("TOKEN_JOHNNY")
 bot_johnny = telebot.TeleBot(TOKEN_JOHNNY)
 
-FILE_SHEET_NAME_JOHNNY = os.getenv("FILE_SHEET_NAME_JOHNNY", "Piscey_Salary_Tracker")
+FILE_SHEET_NAME_JOHNNY = os.getenv("FILE_SHEET_NAME_JOHNNY")
 FILE_KEY_JSON_JOHNNY = 'creds_chamcong.json'
 
 creds_chamcong = ServiceAccountCredentials.from_json_keyfile_name(FILE_KEY_JSON_JOHNNY, scope)
@@ -1554,12 +1554,96 @@ def handle_inline_view(call):
             markup = get_months_keyboard(months, page, prefix="view")
             bot_johnny.edit_message_text("Sếp muốn xem Kế hoạch thu chi của **kỳ lương nào**?", chat_id, msg_id, reply_markup=markup, parse_mode='Markdown')
         except Exception as e:
+            import traceback
+            print("=== LỖI TẠI MENU INLINE ===")
+            traceback.print_exc() 
             bot_johnny.edit_message_text(f"❌ Lỗi chuyển trang: {e}", chat_id, msg_id)
         return
     if call.data.startswith('viewmonth_'):
         month_val = call.data.split('_')[1] 
         bot_johnny.edit_message_text(f"⏳ Dạ sếp! Đợi em vài giây để em lôi sổ cái **Tháng {month_val}** ra báo cáo nhé...", chat_id, msg_id, parse_mode='Markdown')
         generate_budget_report(chat_id, month_val)
+
+@bot_johnny.callback_query_handler(func=lambda call: call.data.startswith('delmonth_') or call.data.startswith('delpage_') or call.data == 'delcancel' or call.data.startswith('delitem_'))
+def handle_inline_delete_johnny(call):
+    bot_johnny.answer_callback_query(call.id)
+    chat_id = call.message.chat.id
+    msg_id = call.message.message_id
+    
+    if call.data == 'delcancel':
+        bot_johnny.edit_message_text("❌ <b>Đã huỷ thao tác xoá khoản chi!</b>", chat_id, msg_id, parse_mode='HTML')
+        return
+        
+    if call.data.startswith('delpage_'):
+        page = int(call.data.split('_')[1])
+        try:
+            all_rows = sheet_budget.get_all_values()
+            months = []
+            for row in all_rows[1:]:
+                if len(row) >= 2 and row[1].startswith("Tháng") and row[1] not in months: months.append(row[1])
+            def sort_key(m_str):
+                try: m, y = map(int, m_str.replace("Tháng ", "").split('/')); return y, m
+                except: return 0, 0
+            months.sort(key=sort_key)
+            markup = get_months_keyboard(months, page, prefix="del")
+            bot_johnny.edit_message_text("Sếp muốn xoá khoản chi của <b>kỳ lương nào</b>?", chat_id, msg_id, reply_markup=markup, parse_mode='HTML')
+        except Exception as e:
+            bot_johnny.edit_message_text(f"❌ Lỗi: {e}", chat_id, msg_id)
+        return
+
+    if call.data.startswith('delmonth_'):
+        month_val = call.data.split('_')[1]
+        target_ky = f"Tháng {month_val}"
+        bot_johnny.edit_message_text(f"⏳ Đang tải danh sách khoản chi của <b>{target_ky}</b>...", chat_id, msg_id, parse_mode='HTML')
+        try:
+            all_rows = sheet_budget.get_all_values()
+            items = []
+            for i, row in enumerate(all_rows[1:], start=2):
+                if len(row) >= 4 and row[1] == target_ky:
+                    m_id = row[0].replace("'", "")
+                    ten = row[2]
+                    try: tien = int(re.sub(r'[^\d]', '', str(row[3])))
+                    except: tien = 0
+                    items.append({"row": i, "id": m_id, "name": ten, "amount": tien})
+            if not items:
+                bot_johnny.edit_message_text(f"⚠️ Không có khoản chi nào trong <b>{target_ky}</b>!", chat_id, msg_id, parse_mode='HTML')
+                return
+            
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            for item in items[:80]: 
+                btn_text = f"[{item['id']}] {item['name'][:15]} - {format_vnd(item['amount'])}đ"
+                markup.add(types.InlineKeyboardButton(btn_text, callback_data=f"delitem_{item['row']}_{item['id']}"))
+            markup.add(types.InlineKeyboardButton("❌ Huỷ", callback_data="delcancel"))
+            bot_johnny.edit_message_text(f"🗑️ Chọn khoản sếp muốn xoá trong <b>{target_ky}</b>:", chat_id, msg_id, reply_markup=markup, parse_mode='HTML')
+        except Exception as e:
+            bot_johnny.edit_message_text(f"❌ Lỗi: {e}", chat_id, msg_id)
+        return
+        
+    if call.data.startswith('delitem_'):
+        parts = call.data.split('_')
+        target_id = parts[2]
+        bot_johnny.edit_message_text(f"⏳ Đang xoá khoản <b>{target_id}</b>...", chat_id, msg_id, parse_mode='HTML')
+        try:
+            all_rows = sheet_budget.get_all_values()
+            actual_row = -1
+            target_ky_luong = ""
+            ten_khoan_chi_cu = ""
+            for i, row in enumerate(all_rows):
+                if len(row) > 0 and row[0].replace("'", "") == target_id:
+                    actual_row = i + 1
+                    target_ky_luong = row[1]
+                    ten_khoan_chi_cu = row[2]
+                    break
+            if actual_row == -1:
+                bot_johnny.edit_message_text(f"❓ Không tìm thấy mã khoản chi <code>{target_id}</code> để xoá.", chat_id, msg_id, parse_mode='HTML')
+            else:
+                sheet_budget.delete_rows(actual_row)
+                reindex_budget_sheet(target_ky_luong) 
+                sheet_budget.sort((1, 'asc'), range='A2:F1000') 
+                bot_johnny.edit_message_text(f"🗑️ Đã xoá khoản chi <b>{ten_khoan_chi_cu}</b> <code>{target_id}</code>.\n✨ Số thứ tự các mã ID còn lại đã được tự động sắp xếp cuốn chiếu gọn gàng!", chat_id, msg_id, parse_mode='HTML')
+        except Exception as e:
+            bot_johnny.edit_message_text(f"❌ Lỗi: {e}", chat_id, msg_id)
+        return
 
 @bot_johnny.message_handler(func=lambda message: re.match(r'(?i)thu chi\s*(t|tháng\s*)(\d{1,2})(?:/|\s+)?(\d{4}|\d{2})?\b', message.text))
 def text_budget_report(message):
@@ -1599,7 +1683,7 @@ def generate_budget_report(chat_id, month_str):
                 break
         if luong_thang_truoc == 0:
             b2_val = sheet_dash.acell('B2').value
-            try: _, m_dash = map(int, b2_val.split('/')[0:2]) # Fix lỗi lấy dư Năm
+            try: _, m_dash = map(int, b2_val.split('/')[0:2]) 
             except: m_dash = 0
             
             if prev_m == m_dash and prev_y == now.year:
@@ -1624,7 +1708,7 @@ def generate_budget_report(chat_id, month_str):
                 if "✅" in trang_thai or "xong" in trang_thai.lower():
                     da_thanh_toan += tien; icon = "🟩"
                 else: icon = "🟥"
-                danh_sach_chi.append(f"{icon} `[{m_id}]` {ten}: `{format_vnd(tien)} đ` ({trang_thai})")
+                danh_sach_chi.append(f"{icon} <code>[{m_id}]</code> {ten}: <code>{format_vnd(tien)} đ</code> ({trang_thai})")
         payday_start = datetime(y_part, m_part, 10).date()
         if payday_start.weekday() == 5: payday_start -= timedelta(days=1)
         elif payday_start.weekday() == 6: payday_start += timedelta(days=1)
@@ -1634,29 +1718,35 @@ def generate_budget_report(chat_id, month_str):
         if payday_end.weekday() == 5: payday_end -= timedelta(days=1)
         elif payday_end.weekday() == 6: payday_end += timedelta(days=1)
         tien_tu_do = luong_thang_truoc - tong_du_chi
-        response = f"💸 **KẾ HOẠCH CHI TIÊU - NGÂN SÁCH THÁNG {m_part:02d}/{y_part}**\n━━━━━━━━━━━━━━━━━━\n"
-        response += f"💵 **Vốn từ Kỳ Lương T{prev_m:02d}:** `{format_vnd(luong_thang_truoc)} đ` {note_luong}\n\n"
-        response += "📝 **CÁC KHOẢN DỰ CHI:**\n" + ("\n".join(danh_sach_chi) + "\n" if danh_sach_chi else "Chưa có kế hoạch chi tiêu nào.\n")
+        
+        response = f"💸 <b>KẾ HOẠCH CHI TIÊU - NGÂN SÁCH THÁNG {m_part:02d}/{y_part}</b>\n━━━━━━━━━━━━━━━━━━\n"
+        response += f"💵 <b>Vốn từ Kỳ Lương T{prev_m:02d}:</b> <code>{format_vnd(luong_thang_truoc)} đ</code> {note_luong}\n\n"
+        response += "📝 <b>CÁC KHOẢN DỰ CHI:</b>\n" + ("\n".join(danh_sach_chi) + "\n" if danh_sach_chi else "Chưa có kế hoạch chi tiêu nào.\n")
         response += "━━━━━━━━━━━━━━━━━━\n"
-        response += f"➖ Tổng dự chi T{m_part}: `{format_vnd(tong_du_chi)} đ`\n➖ Đã thanh toán: `{format_vnd(da_thanh_toan)} đ`\n\n"
-        response += f"💰 **TIỀN TỰ DO CÒN LẠI:** **`{format_vnd(tien_tu_do)} đ`**\n"
+        response += f"➖ Tổng dự chi T{m_part}: <code>{format_vnd(tong_du_chi)} đ</code>\n➖ Đã thanh toán: <code>{format_vnd(da_thanh_toan)} đ</code>\n\n"
+        response += f"💰 <b>TIỀN TỰ DO CÒN LẠI:</b> <b><code>{format_vnd(tien_tu_do)} đ</code></b>\n"
+        
         if now.date() < payday_start:
             total_days = (payday_end - payday_start).days
-            if tien_tu_do >= 0: response += f"*(⏳ Ngân sách này sẽ kích hoạt vào {payday_start.strftime('%d/%m')} -> Mức tiêu dự kiến: **{format_vnd(tien_tu_do // total_days)} đ/ngày**)*"
-            else: response += "*(⚠️ BÁO ĐỘNG: Quỹ chi tiêu tương lai đang bị âm tiền!)*"
+            if tien_tu_do >= 0: response += f"<i>(⏳ Ngân sách này sẽ kích hoạt vào {payday_start.strftime('%d/%m')} -> Mức tiêu dự kiến: <b>{format_vnd(tien_tu_do // total_days)} đ/ngày</b>)</i>"
+            else: response += "<i>(⚠️ BÁO ĐỘNG: Quỹ chi tiêu tương lai đang bị âm tiền!)</i>"
         elif payday_start <= now.date() < payday_end:
             total_days_in_period = (payday_end - payday_start).days 
             delta_nhan_nay = (payday_end - now.date()).days 
             if tien_tu_do >= 0:
                 muc_tieu_goc = tien_tu_do // total_days_in_period
                 muc_tieu_thuc_te = tien_tu_do // delta_nhan_nay
-                response += f"*(💡 Mốc tiêu vặt an toàn cố định của kỳ này là: **{format_vnd(muc_tieu_goc)} đ/ngày**)*\n"
-                if muc_tieu_thuc_te < muc_tieu_goc: response += f"*(⚠️ Sếp ơi, những ngày qua tiêu hơi lẹm rồi đấy! Hạn mức thực tế còn lại chỉ là: **{format_vnd(muc_tieu_thuc_te)} đ/ngày** thôi, thắt lưng buộc bụng lại nhé!)*"
-                else: response += f"*(🎉 Phong độ tốt! Hạn mức thực tế còn lại của sếp vẫn đang ở mức an toàn: **{format_vnd(muc_tieu_thuc_te)} đ/ngày**)*"
-            else: response += "*(⚠️ BÁO ĐỘNG ĐỎ: Quỹ chi tiêu tháng này đang vượt mức lương sếp ơi!)*"
-        else: response += "*(🎉 Kỳ ngân sách này đã qua ngày thanh toán!)*"
-        bot_johnny.send_message(chat_id, response, parse_mode='Markdown')
+                response += f"<i>(💡 Mốc tiêu vặt an toàn cố định của kỳ này là: <b>{format_vnd(muc_tieu_goc)} đ/ngày</b>)</i>\n"
+                if muc_tieu_thuc_te < muc_tieu_goc: response += f"<i>(⚠️ Sếp ơi, những ngày qua tiêu hơi lẹm rồi đấy! Hạn mức thực tế còn lại chỉ là: <b>{format_vnd(muc_tieu_thuc_te)} đ/ngày</b> thôi, thắt lưng buộc bụng lại nhé!)</i>"
+                else: response += f"<i>(🎉 Phong độ tốt! Hạn mức thực tế còn lại của sếp vẫn đang ở mức an toàn: <b>{format_vnd(muc_tieu_thuc_te)} đ/ngày</b>)</i>"
+            else: response += "<i>(⚠️ BÁO ĐỘNG ĐỎ: Quỹ chi tiêu tháng này đang vượt mức lương sếp ơi!)</i>"
+        else: response += "<i>(🎉 Kỳ ngân sách này đã qua ngày thanh toán!)</i>"
+        
+        bot_johnny.send_message(chat_id, response, parse_mode='HTML')
     except Exception as e:
+        import traceback
+        print("=== LỖI TẠI GOOGLE SHEETS / BÁO CÁO ===")
+        traceback.print_exc() # Bắt quả tang lỗi nằm ở dòng nào
         bot_johnny.send_message(chat_id, f"❌ Lỗi tải báo cáo thu chi: {e}")
 
 @bot_johnny.message_handler(func=lambda message: 'xoá' in message.text.lower() or 'xóa' in message.text.lower())
@@ -1869,7 +1959,7 @@ def handle_stats(call):
             markup = types.InlineKeyboardMarkup(row_width=2)
             for ht in hashtags: markup.add(types.InlineKeyboardButton(ht, callback_data=f"view_hash_{ht}"))
             markup.add(types.InlineKeyboardButton("❌ Huỷ", callback_data="stats_cancel"))
-            bot_johnny.edit_message_text("🎯 **Chọn Hashtag/Mục tiêu sếp muốn xem tiến độ:**", chat_id, msg_id, reply_markup=markup, parse_mode='Markdown')
+            bot_johnny.edit_message_text("🎯 <b>Chọn Hashtag/Mục tiêu sếp muốn xem tiến độ:</b>", chat_id, msg_id, reply_markup=markup, parse_mode='HTML')
         except Exception as e:
             bot_johnny.edit_message_text(f"❌ Lỗi lấy danh sách Hashtag: {e}", chat_id, msg_id)
     elif call.data.startswith('view_hash_'):
@@ -1896,20 +1986,22 @@ def handle_stats(call):
                         if row[0].strip().lower() == target_hash.lower():
                             sheet_goals.update_cell(i, 4, "✅ Đã xong")
                             break
-            msg = f"🏷️ **THỐNG KÊ HASHTAG:** `{target_hash}`\n━━━━━━━━━━━━━━━━━━\n"
+            msg = f"🏷️ <b>THỐNG KÊ HASHTAG:</b> <code>{target_hash}</code>\n━━━━━━━━━━━━━━━━━━\n"
             if muc_tieu_tien > 0:
                 filled = percent // 10
                 bar = f"[{'▓' * filled}{'░' * (10 - filled)}]"
                 con_thieu = muc_tieu_tien - da_gom
-                safe_ten = ten_muc_tieu.replace('_', '\\_') 
-                msg += f"📝 **Tên dự án:** {safe_ten}\n💰 **Vốn cần thiết:** `{format_vnd(muc_tieu_tien)} đ`\n✅ **Đã rót vào:** `{format_vnd(da_gom)} đ`\n🚀 **Tiến độ:** {bar} **{percent}%**\n\n"
-                msg += f"*(Còn thiếu `{format_vnd(con_thieu)} đ` nữa là kết thúc dự án!)*" if con_thieu > 0 else "*(🎉 BINGO! Dự án đã hoàn tất giải ngân!)*"
+                msg += f"📝 <b>Tên dự án:</b> {ten_muc_tieu}\n💰 <b>Vốn cần thiết:</b> <code>{format_vnd(muc_tieu_tien)} đ</code>\n✅ <b>Đã rót vào:</b> <code>{format_vnd(da_gom)} đ</code>\n🚀 <b>Tiến độ:</b> {bar} <b>{percent}%</b>\n\n"
+                msg += f"<i>(Còn thiếu <code>{format_vnd(con_thieu)} đ</code> nữa là kết thúc dự án!)</i>" if con_thieu > 0 else "<i>(🎉 BINGO! Dự án đã hoàn tất giải ngân!)</i>"
             else:
-                msg += "*(Đây là hạng mục phân loại chi tiêu, không có hạn mức mục tiêu cụ thể)*\n\n"
-                msg += f"💸 **Tổng tiền đã chi cho `{target_hash}`:**\n👉 **`{format_vnd(da_gom)} đ`**\n"
-            bot_johnny.edit_message_text(msg, chat_id, msg_id, parse_mode='Markdown')
+                msg += "<i>(Đây là hạng mục phân loại chi tiêu, không có hạn mức mục tiêu cụ thể)</i>\n\n"
+                msg += f"💸 <b>Tổng tiền đã chi cho <code>{target_hash}</code>:</b>\n👉 <b><code>{format_vnd(da_gom)} đ</code></b>\n"
+            bot_johnny.edit_message_text(msg, chat_id, msg_id, parse_mode='HTML')
         except Exception as e:
-            bot_johnny.edit_message_text(f"❌ Lỗi xuất báo cáo Hashtag: {e}", chat_id, msg_id)
+            import traceback
+            print("=== LỖI TẠI THỐNG KÊ ===")
+            traceback.print_exc()
+            bot_johnny.edit_message_text(f"❌ Lỗi báo cáo: {e}", chat_id, msg_id)
 
 @bot_johnny.message_handler(func=lambda message: True)
 def process_input_johnny(message):
