@@ -1883,34 +1883,73 @@ def confirm_actual_salary(message):
 @bot_johnny.message_handler(func=lambda message: message.text == '📈 Thống Kê & Mục Tiêu')
 def show_stats_menu(message):
     markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("📅 Thống kê theo Tháng", callback_data="stats_list_month"), types.InlineKeyboardButton(f"📆 Thống kê Năm nay ({datetime.now().year})", callback_data=f"stats_year_{datetime.now().year}"), types.InlineKeyboardButton("🎯 Thống kê Mục tiêu & Hashtag", callback_data="stats_list_hash"), types.InlineKeyboardButton("❌ Huỷ", callback_data="stats_cancel"))
+    markup.add(
+        types.InlineKeyboardButton("📅 Thống kê theo Tháng", callback_data="stats_list_month"), 
+        types.InlineKeyboardButton("📆 Thống kê theo Năm", callback_data="stats_list_year"), 
+        types.InlineKeyboardButton("🎯 Thống kê Mục tiêu & Hashtag", callback_data="stats_list_hash"), 
+        types.InlineKeyboardButton("❌ Huỷ", callback_data="stats_cancel")
+    )
     bot_johnny.reply_to(message, "📊 Sếp muốn xuất báo cáo thống kê theo dạng nào?", reply_markup=markup)
 
-@bot_johnny.callback_query_handler(func=lambda call: call.data.startswith('stats_') or call.data.startswith('view_hash_') or call.data.startswith('stmonth_'))
+@bot_johnny.callback_query_handler(func=lambda call: call.data.startswith('stats_') or call.data.startswith('view_hash_') or call.data.startswith('stmonth_') or call.data.startswith('hash_opt_') or call.data.startswith('hash_year_'))
 def handle_stats(call):
     bot_johnny.answer_callback_query(call.id)
     chat_id = call.message.chat.id; msg_id = call.message.message_id
     if call.data == 'stats_cancel':
-        bot_johnny.edit_message_text("❌ **Đã huỷ menu thống kê!**", chat_id, msg_id, parse_mode='Markdown')
+        bot_johnny.edit_message_text("❌ <b>Đã huỷ menu thống kê!</b>", chat_id, msg_id, parse_mode='HTML')
         return
-    if call.data.startswith('stats_year_'):
+        
+    elif call.data == 'stats_list_year':
+        bot_johnny.edit_message_text("⏳ Đang quét dữ liệu các năm...", chat_id, msg_id, parse_mode='HTML')
+        try:
+            years = set()
+            # Lọc năm từ sheet History
+            for row in sheet_hist.get_all_values()[1:]:
+                if len(row) > 0:
+                    match = re.search(r'\d{4}', row[0])
+                    if match: years.add(match.group(0))
+            # Lọc thêm từ sheet Budget để không sót
+            for row in sheet_budget.get_all_values()[1:]:
+                if len(row) >= 2:
+                    match = re.search(r'\d{4}', row[1])
+                    if match: years.add(match.group(0))
+            
+            if not years:
+                bot_johnny.edit_message_text("⚠️ Chưa có dữ liệu năm nào trong sổ!", chat_id, msg_id)
+                return
+            
+            years_list = sorted(list(years), reverse=True)
+            markup = types.InlineKeyboardMarkup(row_width=3)
+            buttons = [types.InlineKeyboardButton(f"Năm {y}", callback_data=f"stats_year_{y}") for y in years_list]
+            markup.add(*buttons)
+            markup.add(types.InlineKeyboardButton("❌ Huỷ", callback_data="stats_cancel"))
+            bot_johnny.edit_message_text("📆 <b>Chọn năm sếp muốn xem thống kê:</b>", chat_id, msg_id, reply_markup=markup, parse_mode='HTML')
+        except Exception as e:
+            bot_johnny.edit_message_text(f"❌ Lỗi tải danh sách năm: {e}", chat_id, msg_id)
+
+    elif call.data.startswith('stats_year_'):
         target_year = call.data.split('_')[2]
         bot_johnny.edit_message_text(f"⏳ Đang tổng hợp dữ liệu thu chi cả năm {target_year}...", chat_id, msg_id)
         try:
             tong_thu = 0; tong_chi_thuc = 0
             for row in sheet_hist.get_all_values()[1:]:
                 if len(row) > 0 and str(target_year) in row[0]:
-                    tien_str = row[2] if len(row) > 2 and row[2].strip() else (row[1] if len(row) > 1 else "0")
+                    # BUG 2 FIX: CHỈ lấy Lương Thực Nhận (cột C, index 2), tuyệt đối không cộng Lương Dự Tính
+                    tien_str = row[2] if len(row) > 2 and row[2].strip() else "0"
                     try: tong_thu += int(re.sub(r'[^\d]', '', str(tien_str)))
                     except: pass
             for row in sheet_budget.get_all_values()[1:]:
                 if len(row) >= 5 and f"/{target_year}" in row[1] and ("✅" in row[4] or "xong" in row[4].lower()):
                     try: tong_chi_thuc += int(re.sub(r'[^\d]', '', str(row[3])))
                     except: pass
-            msg = f"📆 <b>BỨC TRANH TÀI CHÍNH NĂM {target_year}</b>\n━━━━━━━━━━━━━━━━━━\n💵 <b>Tổng cày cuốc:</b> <code>{format_vnd(tong_thu)} đ</code>\n💸 <b>Đã thực chi:</b> <code>{format_vnd(tong_chi_thuc)} đ</code>\n"
-            bot_johnny.edit_message_text(msg, chat_id, msg_id, parse_mode='HTML')
+            msg = f"📆 <b>BỨC TRANH TÀI CHÍNH NĂM {target_year}</b>\n━━━━━━━━━━━━━━━━━━\n💵 <b>Tổng thực nhận:</b> <code>{format_vnd(tong_thu)} đ</code>\n💸 <b>Đã thực chi:</b> <code>{format_vnd(tong_chi_thuc)} đ</code>\n"
+            
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ Quay lại", callback_data="stats_list_year"))
+            bot_johnny.edit_message_text(msg, chat_id, msg_id, reply_markup=markup, parse_mode='HTML')
         except Exception as e:
             bot_johnny.edit_message_text(f"❌ Lỗi tính toán năm: {e}", chat_id, msg_id)
+
     elif call.data == 'stats_list_month':
         bot_johnny.edit_message_text("⏳ Đang tải danh sách các tháng...", chat_id, msg_id)
         try:
@@ -1928,23 +1967,41 @@ def handle_stats(call):
             bot_johnny.edit_message_text("📅 <b>Chọn tháng sếp muốn xem tổng quan:</b>", chat_id, msg_id, reply_markup=markup, parse_mode='HTML')
         except Exception as e:
             bot_johnny.edit_message_text(f"❌ Lỗi tải danh sách tháng: {e}", chat_id, msg_id)
+
     elif call.data.startswith('stmonth_'):
-        target_ky = f"Tháng {call.data.replace('stmonth_', '')}"
-        bot_johnny.edit_message_text(f"⏳ Đang tổng hợp dữ liệu <b>{target_ky}</b>...", chat_id, msg_id, parse_mode='HTML')
+        target_ky = call.data.replace('stmonth_', '')
+        try: m_part, y_part = target_ky.split('/')
+        except: m_part, y_part = "0", "0"
+        display_ky = f"Tháng {target_ky}"
+        
+        bot_johnny.edit_message_text(f"⏳ Đang tổng hợp dữ liệu <b>{display_ky}</b>...", chat_id, msg_id, parse_mode='HTML')
         try:
             tong_thu = 0; tong_chi = 0
             for row in sheet_hist.get_all_values()[1:]:
-                if row[0].startswith(target_ky) or row[0].startswith(target_ky.replace("Tháng ", "Tháng 0")):
-                    tien_str = row[2] if len(row) > 2 and row[2].strip() else (row[1] if len(row) > 1 else "0")
+                # BUG 1 FIX: Match chuẩn rẽ đôi Tháng và Năm để tìm trong chuỗi dài của Sheet History
+                if len(row) > 0 and (row[0].startswith(f"Tháng {m_part}") or row[0].startswith(f"Tháng {int(m_part)}")) and str(y_part) in row[0]:
+                    tien_str_thuc = row[2] if len(row) > 2 else ""
+                    tien_str_du = row[1] if len(row) > 1 else ""
+                    
+                    # Ưu tiên lấy Lương Thực Nhận làm mốc nếu có
+                    if tien_str_thuc and str(tien_str_thuc).strip() != "":
+                        tien_str = tien_str_thuc
+                    else:
+                        tien_str = tien_str_du
+                        
                     try: tong_thu = int(re.sub(r'[^\d]', '', str(tien_str)))
                     except: pass
                     break
+                    
             for row in sheet_budget.get_all_values()[1:]:
-                if len(row) >= 5 and row[1] == target_ky and ("✅" in row[4] or "xong" in row[4].lower()):
+                if len(row) >= 5 and row[1] == display_ky and ("✅" in row[4] or "xong" in row[4].lower()):
                     try: tong_chi += int(re.sub(r'[^\d]', '', str(row[3])))
                     except: pass
-            msg = f"📅 <b>THỐNG KÊ {target_ky}</b>\n━━━━━━━━━━━━━━━━━━\n💵 <b>Thu nhập:</b> <code>{format_vnd(tong_thu)} đ</code>\n💸 <b>Đã thực chi:</b> <code>{format_vnd(tong_chi)} đ</code>\n"
-            bot_johnny.edit_message_text(msg, chat_id, msg_id, parse_mode='HTML')
+            msg = f"📅 <b>THỐNG KÊ {display_ky}</b>\n━━━━━━━━━━━━━━━━━━\n💵 <b>Thu nhập:</b> <code>{format_vnd(tong_thu)} đ</code>\n💸 <b>Đã thực chi:</b> <code>{format_vnd(tong_chi)} đ</code>\n"
+            
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ Quay lại", callback_data="stats_list_month"))
+            bot_johnny.edit_message_text(msg, chat_id, msg_id, reply_markup=markup, parse_mode='HTML')
         except Exception as e:
             bot_johnny.edit_message_text(f"❌ Lỗi báo cáo tháng: {e}", chat_id, msg_id)
     elif call.data == 'stats_list_hash':
@@ -1964,8 +2021,9 @@ def handle_stats(call):
             bot_johnny.edit_message_text(f"❌ Lỗi lấy danh sách Hashtag: {e}", chat_id, msg_id)
     elif call.data.startswith('view_hash_'):
         target_hash = call.data.replace('view_hash_', '')
-        bot_johnny.edit_message_text(f"⏳ Đang tính toán dữ liệu thu chi cho hashtag...", chat_id, msg_id)
+        bot_johnny.edit_message_text(f"⏳ Đang phân tích dữ liệu cho hashtag <code>{target_hash}</code>...", chat_id, msg_id, parse_mode='HTML')
         try:
+            # 1. Quét xem Hashtag có nằm trong Sheet Goals không
             muc_tieu_tien = 0; ten_muc_tieu = ""
             for row in sheet_goals.get_all_values()[1:]:
                 if len(row) > 2 and row[0].strip().lower() == target_hash.lower():
@@ -1973,35 +2031,130 @@ def handle_stats(call):
                     try: muc_tieu_tien = int(re.sub(r'[^\d]', '', str(row[2])))
                     except: pass
                     break
-            da_gom = 0
-            for row in sheet_budget.get_all_values()[1:]:
-                if len(row) >= 6 and target_hash.lower() in row[5].lower() and ("✅" in row[4] or "xong" in row[4].lower()):
-                    try: da_gom += int(re.sub(r'[^\d]', '', str(row[3])))
-                    except: pass
-            percent = 0 
+
             if muc_tieu_tien > 0:
+                # --- TRƯỜNG HỢP 1: CÓ TRONG GOALS (Chạy thanh tiến độ) ---
+                da_gom = 0
+                for row in sheet_budget.get_all_values()[1:]:
+                    if len(row) >= 6 and target_hash.lower() in row[5].lower() and ("✅" in row[4] or "xong" in row[4].lower()):
+                        try: da_gom += int(re.sub(r'[^\d]', '', str(row[3])))
+                        except: pass
                 percent = min(100, int((da_gom / muc_tieu_tien) * 100))
                 if percent >= 100:
                     for i, row in enumerate(sheet_goals.get_all_values()[1:], start=2):
                         if row[0].strip().lower() == target_hash.lower():
                             sheet_goals.update_cell(i, 4, "✅ Đã xong")
                             break
-            msg = f"🏷️ <b>THỐNG KÊ HASHTAG:</b> <code>{target_hash}</code>\n━━━━━━━━━━━━━━━━━━\n"
-            if muc_tieu_tien > 0:
+                msg = f"🏷️️ <b>THỐNG KÊ HASHTAG:</b> <code>{target_hash}</code>\n━━━━━━━━━━━━━━━━━━\n"
                 filled = percent // 10
                 bar = f"[{'▓' * filled}{'░' * (10 - filled)}]"
                 con_thieu = muc_tieu_tien - da_gom
                 msg += f"📝 <b>Tên dự án:</b> {ten_muc_tieu}\n💰 <b>Vốn cần thiết:</b> <code>{format_vnd(muc_tieu_tien)} đ</code>\n✅ <b>Đã rót vào:</b> <code>{format_vnd(da_gom)} đ</code>\n🚀 <b>Tiến độ:</b> {bar} <b>{percent}%</b>\n\n"
                 msg += f"<i>(Còn thiếu <code>{format_vnd(con_thieu)} đ</code> nữa là kết thúc dự án!)</i>" if con_thieu > 0 else "<i>(🎉 BINGO! Dự án đã hoàn tất giải ngân!)</i>"
+                
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("⬅️ Quay lại", callback_data="stats_list_hash"))
+                bot_johnny.edit_message_text(msg, chat_id, msg_id, reply_markup=markup, parse_mode='HTML')
+            
             else:
-                msg += "<i>(Đây là hạng mục phân loại chi tiêu, không có hạn mức mục tiêu cụ thể)</i>\n\n"
-                msg += f"💸 <b>Tổng tiền đã chi cho <code>{target_hash}</code>:</b>\n👉 <b><code>{format_vnd(da_gom)} đ</code></b>\n"
-            bot_johnny.edit_message_text(msg, chat_id, msg_id, parse_mode='HTML')
+                # --- TRƯỜNG HỢP 2: KHÔNG CÓ TRONG GOALS (Khoản chi dài hạn - Mở Menu Lọc) ---
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                markup.add(
+                    types.InlineKeyboardButton("📆 Xem theo Năm", callback_data=f"hash_opt_year_{target_hash}"),
+                    types.InlineKeyboardButton("🌍 Xem Tổng Cộng", callback_data=f"hash_opt_total_{target_hash}")
+                )
+                markup.add(types.InlineKeyboardButton("⬅️ Quay lại", callback_data="stats_list_hash"))
+                
+                msg = f"🏷️ <b>HASHTAG:</b> <code>{target_hash}</code>\n<i>(Khoản chi dài hạn, không có hạn mức tổng trong Quỹ Mục Tiêu)</i>\n\nSếp muốn xem thống kê theo dạng nào?"
+                bot_johnny.edit_message_text(msg, chat_id, msg_id, reply_markup=markup, parse_mode='HTML')
+                
         except Exception as e:
             import traceback
-            print("=== LỖI TẠI THỐNG KÊ ===")
+            print("=== LỖI TẠI THỐNG KÊ HASHTAG ===")
             traceback.print_exc()
             bot_johnny.edit_message_text(f"❌ Lỗi báo cáo: {e}", chat_id, msg_id)
+
+    elif call.data.startswith('hash_opt_total_'):
+        target_hash = call.data.replace('hash_opt_total_', '')
+        bot_johnny.edit_message_text(f"⏳ Đang cộng sổ toàn bộ các năm cho khoản <code>{target_hash}</code>...", chat_id, msg_id, parse_mode='HTML')
+        try:
+            tong_can_chi = 0
+            tong_da_chi = 0
+            for row in sheet_budget.get_all_values()[1:]:
+                if len(row) >= 6 and target_hash.lower() in row[5].lower():
+                    try: tien = int(re.sub(r'[^\d]', '', str(row[3])))
+                    except: tien = 0
+                    tong_can_chi += tien
+                    if "✅" in row[4] or "xong" in row[4].lower():
+                        tong_da_chi += tien
+            con_lai = tong_can_chi - tong_da_chi
+            
+            msg = f"🌍 <b>THỐNG KÊ TỔNG TOÀN THỜI GIAN:</b> <code>{target_hash}</code>\n━━━━━━━━━━━━━━━━━━\n"
+            msg += f"📦 <b>Tổng tiền cần chi:</b> <code>{format_vnd(tong_can_chi)} đ</code>\n"
+            msg += f"✅ <b>Đã thanh toán:</b> <code>{format_vnd(tong_da_chi)} đ</code>\n"
+            msg += f"⏳ <b>Còn lại chưa trả:</b> <code>{format_vnd(con_lai)} đ</code>\n"
+            
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ Quay lại", callback_data=f"view_hash_{target_hash}"))
+            bot_johnny.edit_message_text(msg, chat_id, msg_id, reply_markup=markup, parse_mode='HTML')
+        except Exception as e:
+            bot_johnny.edit_message_text(f"❌ Lỗi tổng hợp: {e}", chat_id, msg_id)
+
+    elif call.data.startswith('hash_opt_year_'):
+        target_hash = call.data.replace('hash_opt_year_', '')
+        bot_johnny.edit_message_text(f"⏳ Đang quét các năm có phát sinh khoản <code>{target_hash}</code>...", chat_id, msg_id, parse_mode='HTML')
+        try:
+            years = set()
+            for row in sheet_budget.get_all_values()[1:]:
+                if len(row) >= 6 and target_hash.lower() in row[5].lower():
+                    ky_chi_tieu = row[1] 
+                    match = re.search(r'\d{4}', ky_chi_tieu)
+                    if match: years.add(match.group(0))
+            
+            if not years:
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("⬅️ Quay lại", callback_data=f"view_hash_{target_hash}"))
+                bot_johnny.edit_message_text("⚠️ Không tìm thấy năm nào có ghi nhận khoản chi này!", chat_id, msg_id, reply_markup=markup)
+                return
+            
+            years_list = sorted(list(years), reverse=True)
+            markup = types.InlineKeyboardMarkup(row_width=3)
+            buttons = [types.InlineKeyboardButton(f"Năm {y}", callback_data=f"hash_year_{target_hash}_{y}") for y in years_list]
+            markup.add(*buttons)
+            markup.add(types.InlineKeyboardButton("⬅️ Quay lại", callback_data=f"view_hash_{target_hash}"))
+            
+            bot_johnny.edit_message_text(f"📆 <b>Chọn năm thống kê cho:</b> <code>{target_hash}</code>", chat_id, msg_id, reply_markup=markup, parse_mode='HTML')
+        except Exception as e:
+            bot_johnny.edit_message_text(f"❌ Lỗi quét năm: {e}", chat_id, msg_id)
+
+    elif call.data.startswith('hash_year_'):
+        # Format: hash_year_#Spay_2026
+        parts = call.data.split('_')
+        target_hash = parts[2]
+        target_year = parts[3]
+        bot_johnny.edit_message_text(f"⏳ Đang chốt sổ năm {target_year} cho <code>{target_hash}</code>...", chat_id, msg_id, parse_mode='HTML')
+        try:
+            tong_can_chi = 0
+            tong_da_chi = 0
+            for row in sheet_budget.get_all_values()[1:]:
+                if len(row) >= 6 and target_hash.lower() in row[5].lower() and str(target_year) in row[1]:
+                    try: tien = int(re.sub(r'[^\d]', '', str(row[3])))
+                    except: tien = 0
+                    tong_can_chi += tien
+                    if "✅" in row[4] or "xong" in row[4].lower():
+                        tong_da_chi += tien
+            con_lai = tong_can_chi - tong_da_chi
+            
+            msg = f"📆 <b>THỐNG KÊ NĂM {target_year}:</b> <code>{target_hash}</code>\n━━━━━━━━━━━━━━━━━━\n"
+            msg += f"📦 <b>Tổng tiền cần chi:</b> <code>{format_vnd(tong_can_chi)} đ</code>\n"
+            msg += f"✅ <b>Đã thanh toán:</b> <code>{format_vnd(tong_da_chi)} đ</code>\n"
+            msg += f"⏳ <b>Còn lại chưa trả:</b> <code>{format_vnd(con_lai)} đ</code>\n"
+            
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("⬅️ Chọn năm khác", callback_data=f"hash_opt_year_{target_hash}"))
+            bot_johnny.edit_message_text(msg, chat_id, msg_id, reply_markup=markup, parse_mode='HTML')
+        except Exception as e:
+            bot_johnny.edit_message_text(f"❌ Lỗi tổng hợp năm: {e}", chat_id, msg_id)
 
 @bot_johnny.message_handler(func=lambda message: True)
 def process_input_johnny(message):
